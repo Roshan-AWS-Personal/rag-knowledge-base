@@ -1,5 +1,3 @@
-# .github/workflows/terraform-deploy.yml
-
 name: "Terraform Deploy"
 
 on:
@@ -10,14 +8,16 @@ on:
         required: true
         type: choice
         default: "dev"
-        options:
-          - dev
-          - prod
+        options: [dev, prod]
       confirm_apply:
         description: "Set to true to run the apply step (default=false → plan only)"
         required: false
         type: boolean
         default: false
+
+permissions:
+  id-token: write   # <-- REQUIRED for OIDC
+  contents: read
 
 jobs:
   terraform:
@@ -26,60 +26,59 @@ jobs:
     env:
       AWS_REGION: ap-southeast-2
 
-      # Dev vs Prod credentials
-      AWS_ACCESS_KEY_ID_DEV:     ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
-      AWS_SECRET_ACCESS_KEY_DEV: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
-      AWS_ACCESS_KEY_ID_PROD:    ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
-      AWS_SECRET_ACCESS_KEY_PROD: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+      # Backend resources (keep as secrets)
+      STATE_BUCKET_DEV:  ${{ secrets.STATE_BUCKET_DEV }}
+      STATE_BUCKET_PROD: ${{ secrets.STATE_BUCKET_PROD }}
+      DYNAMODB_TABLE:    ${{ secrets.DYNAMODB_TABLE }}
+      STATE_PREFIX:      ${{ secrets.STATE_PREFIX }}
 
-      # Backend resources
-      STATE_BUCKET_DEV:   ${{ secrets.STATE_BUCKET_DEV }}
-      STATE_BUCKET_PROD:  ${{ secrets.STATE_BUCKET_PROD }}
-      DYNAMODB_TABLE:     ${{ secrets.DYNAMODB_TABLE }}
-      STATE_PREFIX:       ${{ secrets.STATE_PREFIX }}
+      # OIDC role ARNs (store as repo/environment secrets)
+      ROLE_ARN_DEV:  ${{ secrets.ROLE_ARN_DEV }}
+      ROLE_ARN_PROD: ${{ secrets.ROLE_ARN_PROD }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Select AWS credentials and bucket
+      - name: Select role & state bucket for env
+        id: select
         run: |
           if [[ "${{ github.event.inputs.environment }}" == "dev" ]]; then
-            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_DEV }}" >> $GITHUB_ENV
-            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_DEV }}" >> $GITHUB_ENV
+            echo "ROLE_TO_ASSUME=${{ env.ROLE_ARN_DEV }}"   >> $GITHUB_ENV
             echo "STATE_BUCKET=${{ env.STATE_BUCKET_DEV }}" >> $GITHUB_ENV
           else
-            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_PROD }}" >> $GITHUB_ENV
-            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_PROD }}" >> $GITHUB_ENV
+            echo "ROLE_TO_ASSUME=${{ env.ROLE_ARN_PROD }}"  >> $GITHUB_ENV
             echo "STATE_BUCKET=${{ env.STATE_BUCKET_PROD }}" >> $GITHUB_ENV
           fi
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: "1.5.0"
-
-      - name: Determine target
-        id: env
-        run: |
           echo "WORK_DIR=live/${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
 
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: tf-${{ github.run_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+
       - name: Terraform Init
-        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        working-directory: ${{ steps.select.outputs.WORK_DIR }}
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ env.STATE_BUCKET }}" \
             -backend-config="key=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate" \
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ env.DYNAMODB_TABLE }}"
-     
-      # ✅ Terraform validate
+
       - name: Terraform Validate
-        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        working-directory: ${{ steps.select.outputs.WORK_DIR }}
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        working-directory: ${{ steps.select.outputs.WORK_DIR }}
         run: |
           terraform plan \
             -var="aws_region=${{ env.AWS_REGION }}" \
@@ -90,5 +89,5 @@ jobs:
 
       - name: Terraform Apply (manual)
         if: ${{ github.event.inputs.confirm_apply == 'true' }}
-        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        working-directory: ${{ steps.select.outputs.WORK_DIR }}
         run: terraform apply -auto-approve tfplan
