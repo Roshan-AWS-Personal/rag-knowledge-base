@@ -1,0 +1,73 @@
+# .github/workflows/backend-bootstrap.yml
+name: "Terraform Backend Bootstrap"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to target (dev or prod)"
+        required: true
+        type: choice
+        default: "dev"
+        options:
+          - dev
+          - prod
+      confirm_apply:
+        description: "Set to true to run 'terraform apply' after the plan"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION:               ${{ secrets.AWS_REGION }}
+      STATE_BUCKET_DEV:         ${{ secrets.STATE_BUCKET_DEV }}
+      STATE_BUCKET_PROD:        ${{ secrets.STATE_BUCKET_PROD }}
+      DYNAMODB_TABLE:           ${{ secrets.DYNAMODB_TABLE }}
+      AWS_ACCESS_KEY_ID_DEV:    ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
+      AWS_SECRET_ACCESS_KEY_DEV: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
+      AWS_ACCESS_KEY_ID_PROD:   ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+      AWS_SECRET_ACCESS_KEY_PROD: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Select AWS credentials and bucket
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "dev" ]]; then
+            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_DEV }}" >> $GITHUB_ENV
+            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_DEV }}" >> $GITHUB_ENV
+            echo "STATE_BUCKET=${{ env.STATE_BUCKET_DEV }}" >> $GITHUB_ENV
+          else
+            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_PROD }}" >> $GITHUB_ENV
+            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_PROD }}" >> $GITHUB_ENV
+            echo "STATE_BUCKET=${{ env.STATE_BUCKET_PROD }}" >> $GITHUB_ENV
+          fi
+
+      - name: Terraform Init
+        working-directory: backend-setup
+        run: |
+          terraform init -backend=false
+
+      - name: Terraform Plan
+        working-directory: backend-setup
+        run: |
+          terraform plan \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="state_bucket_name=${{ env.STATE_BUCKET }}" \
+            -var="dynamodb_table_name=${{ env.DYNAMODB_TABLE }}" \
+            -out=plan.tfplan
+
+      - name: Terraform Apply (manual)
+        if: ${{ github.event.inputs.confirm_apply == 'true' }}
+        working-directory: backend-setup
+        run: terraform apply -auto-approve plan.tfplan

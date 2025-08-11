@@ -1,0 +1,94 @@
+# .github/workflows/terraform-deploy.yml
+
+name: "Terraform Deploy"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to target (dev or prod)"
+        required: true
+        type: choice
+        default: "dev"
+        options:
+          - dev
+          - prod
+      confirm_apply:
+        description: "Set to true to run the apply step (default=false → plan only)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ap-southeast-2
+
+      # Dev vs Prod credentials
+      AWS_ACCESS_KEY_ID_DEV:     ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
+      AWS_SECRET_ACCESS_KEY_DEV: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
+      AWS_ACCESS_KEY_ID_PROD:    ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+      AWS_SECRET_ACCESS_KEY_PROD: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+
+      # Backend resources
+      STATE_BUCKET_DEV:   ${{ secrets.STATE_BUCKET_DEV }}
+      STATE_BUCKET_PROD:  ${{ secrets.STATE_BUCKET_PROD }}
+      DYNAMODB_TABLE:     ${{ secrets.DYNAMODB_TABLE }}
+      STATE_PREFIX:       ${{ secrets.STATE_PREFIX }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Select AWS credentials and bucket
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "dev" ]]; then
+            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_DEV }}" >> $GITHUB_ENV
+            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_DEV }}" >> $GITHUB_ENV
+            echo "STATE_BUCKET=${{ env.STATE_BUCKET_DEV }}" >> $GITHUB_ENV
+          else
+            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_PROD }}" >> $GITHUB_ENV
+            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_PROD }}" >> $GITHUB_ENV
+            echo "STATE_BUCKET=${{ env.STATE_BUCKET_PROD }}" >> $GITHUB_ENV
+          fi
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Determine target
+        id: env
+        run: |
+          echo "WORK_DIR=live/${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ env.STATE_BUCKET }}" \
+            -backend-config="key=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.DYNAMODB_TABLE }}"
+     
+      # ✅ Terraform validate
+      - name: Terraform Validate
+        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        run: |
+          terraform plan \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="state_bucket=${{ env.STATE_BUCKET }}" \
+            -var="state_prefix=${{ env.STATE_PREFIX }}" \
+            -var="dynamodb_table=${{ env.DYNAMODB_TABLE }}" \
+            -out=tfplan
+
+      - name: Terraform Apply (manual)
+        if: ${{ github.event.inputs.confirm_apply == 'true' }}
+        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        run: terraform apply -auto-approve tfplan
