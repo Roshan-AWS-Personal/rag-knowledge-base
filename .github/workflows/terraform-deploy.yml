@@ -51,6 +51,12 @@ jobs:
             echo "STATE_BUCKET=${{ env.STATE_BUCKET_PROD }}" >> $GITHUB_ENV
           fi
           echo "WORK_DIR=live/${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+      
+      - name: Debug context
+        run: |
+          echo "repo=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          echo "computed_sub=repo:${{ github.repository }}:ref:${{ github.ref }}"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -58,6 +64,9 @@ jobs:
           role-to-assume: ${{ env.ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: tf-${{ github.run_id }}
+          
+      - name: Who am I?
+        run: aws sts get-caller-identity
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

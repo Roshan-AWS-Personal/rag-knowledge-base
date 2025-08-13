@@ -24,6 +24,7 @@ locals {
   ]
 }
 
+# allow any branch in this repo (dev convenience)
 data "aws_iam_policy_document" "gha_trust" {
   statement {
     effect  = "Allow"
@@ -41,9 +42,11 @@ data "aws_iam_policy_document" "gha_trust" {
     }
 
     condition {
-      test     = "ForAnyValue:StringLike"
+      test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = local.repo_subs
+      values   = [
+        "repo:${var.github_owner}/${var.github_repo}:ref:refs/heads/*"
+      ]
     }
   }
 }
