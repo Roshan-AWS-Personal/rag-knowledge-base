@@ -69,16 +69,35 @@ resource "aws_iam_role" "gha" {
 ############################################
 
 # 1) Deny actions outside the chosen region
+# Only deny region-scoped services outside your region.
+# Exclude global services so the deny doesn't hit them.
 data "aws_iam_policy_document" "deny_outside_region" {
   statement {
-    sid       = "DenyOutsideRegion"
-    effect    = "Deny"
-    actions   = ["*"]
+    sid        = "DenyOutsideRegion"
+    effect     = "Deny"
+
+    # Deny everything EXCEPT these (global) services
+    not_actions = [
+      "iam:*",
+      "sts:*",
+      # optional but common global services to exclude as well:
+      "cloudfront:*",
+      "route53:*",
+      "waf:*",
+      "wafv2:*",
+      "shield:*",
+      "organizations:*",
+      "support:*",
+      "budgets:*",
+      "globalaccelerator:*"
+    ]
+
     resources = ["*"]
+
     condition {
       test     = "StringNotEquals"
       variable = "aws:RequestedRegion"
-      values   = [var.region] # use your Terraform 'region' variable
+      values   = [var.region]  # ap-southeast-2
     }
   }
 }
