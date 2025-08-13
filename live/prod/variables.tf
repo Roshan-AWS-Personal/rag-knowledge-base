@@ -26,7 +26,7 @@ variable "github_repo"{
 }
 variable "allowed_branches" {
   type    = list(string)
-  default = ["main"] # add "dev" etc if needed
+  default = ["main, initial-config"] # add "dev" etc if needed
 }
 variable "project" {
   type = string
