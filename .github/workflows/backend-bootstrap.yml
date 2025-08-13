@@ -1,4 +1,3 @@
-# .github/workflows/backend-bootstrap.yml
 name: "Terraform Backend Bootstrap"
 
 on:
@@ -9,59 +8,82 @@ on:
         required: true
         type: choice
         default: "dev"
-        options:
-          - dev
-          - prod
+        options: [dev, prod]
       confirm_apply:
         description: "Set to true to run 'terraform apply' after the plan"
         required: false
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
 
     env:
-      AWS_REGION:               ${{ secrets.AWS_REGION }}
-      STATE_BUCKET_DEV:         ${{ secrets.STATE_BUCKET_DEV }}
-      STATE_BUCKET_PROD:        ${{ secrets.STATE_BUCKET_PROD }}
-      DYNAMODB_TABLE:           ${{ secrets.DYNAMODB_TABLE }}
-      AWS_ACCESS_KEY_ID_DEV:    ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
-      AWS_SECRET_ACCESS_KEY_DEV: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
-      AWS_ACCESS_KEY_ID_PROD:   ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
-      AWS_SECRET_ACCESS_KEY_PROD: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+      AWS_REGION:        ${{ secrets.AWS_REGION }}
+      STATE_BUCKET_DEV:  ${{ secrets.STATE_BUCKET_DEV }}
+      STATE_BUCKET_PROD: ${{ secrets.STATE_BUCKET_PROD }}
+      DYNAMODB_TABLE:    ${{ secrets.DYNAMODB_TABLE }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@v2
+      # Choose credentials by environment (using access keys you stored as secrets)
+      - name: Configure AWS credentials (dev)
+        if: ${{ github.event.inputs.environment == 'dev' }}
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          terraform_version: "1.5.0"
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
+          aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Select AWS credentials and bucket
+      - name: Configure AWS credentials (prod)
+        if: ${{ github.event.inputs.environment == 'prod' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Select state bucket for env
+        id: select
         run: |
           if [[ "${{ github.event.inputs.environment }}" == "dev" ]]; then
-            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_DEV }}" >> $GITHUB_ENV
-            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_DEV }}" >> $GITHUB_ENV
             echo "STATE_BUCKET=${{ env.STATE_BUCKET_DEV }}" >> $GITHUB_ENV
           else
-            echo "AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY_ID_PROD }}" >> $GITHUB_ENV
-            echo "AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_ACCESS_KEY_PROD }}" >> $GITHUB_ENV
             echo "STATE_BUCKET=${{ env.STATE_BUCKET_PROD }}" >> $GITHUB_ENV
           fi
+          echo "ENV=${{ github.event.inputs.environment }}" >> $GITHUB_ENV
 
-      - name: Terraform Init
+      - name: Who am I? (STS sanity check)
+        run: aws sts get-caller-identity
+
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.12.2"
+
+      # This folder should contain the TF that creates the S3 bucket and (optionally) the DDB lock table
+      - name: Terraform Init (no backend)
         working-directory: backend-setup
-        run: |
-          terraform init -backend=false
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform Validate
+        working-directory: backend-setup
+        run: terraform validate
 
       - name: Terraform Plan
         working-directory: backend-setup
         run: |
-          terraform plan \
+          terraform plan -input=false \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="state_bucket_name=${{ env.STATE_BUCKET }}" \
             -var="dynamodb_table_name=${{ env.DYNAMODB_TABLE }}" \
