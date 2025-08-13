@@ -1,5 +1,5 @@
 ############################################
-# oidc.tf  (DEV ONLY)
+# oidc.tf  (PROD ONLY)
 # - Reuses existing GitHub OIDC provider
 # - Creates a single GHA role: ${var.project}-${var.env}-gha-role
 # - Attaches Admin (temp) + deny guardrails
@@ -49,10 +49,10 @@ data "aws_iam_policy_document" "gha_trust" {
 }
 
 ############################################
-# Role for GitHub Actions (dev)
+# Role for GitHub Actions (prod)
 ############################################
 resource "aws_iam_role" "gha" {
-  name                 = "${var.project}-${var.env}-gha-role" # e.g., ai-kb-dev-gha-role
+  name                 = "${var.project}-${var.env}-gha-role" # e.g., ai-kb-prod-gha-role
   assume_role_policy   = data.aws_iam_policy_document.gha_trust.json
   max_session_duration = 3600
 
@@ -87,7 +87,7 @@ resource "aws_iam_policy" "deny_outside_region" {
   policy = data.aws_iam_policy_document.deny_outside_region.json
 }
 
-# 2) Deny deleting your Terraform state bucket/lock table (dev)
+# 2) Deny deleting your Terraform state bucket/lock table (prod)
 #    Uses your variables for precision, not wildcards.
 data "aws_iam_policy_document" "deny_tf_state_deletes" {
   statement {
@@ -132,9 +132,9 @@ resource "aws_iam_role_policy_attachment" "attach_deny_tf_state_deletes" {
 }
 
 ############################################
-# Output: use this ARN in your GitHub secret ROLE_ARN_DEV
+# Output: use this ARN in your GitHub secret ROLE_ARN_PROD
 ############################################
 output "gha_role_arn" {
-  description = "IAM role ARN to be assumed by GitHub Actions (dev)"
+  description = "IAM role ARN to be assumed by GitHub Actions (prod)"
   value       = aws_iam_role.gha.arn
 }
