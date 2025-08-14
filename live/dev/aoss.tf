@@ -71,8 +71,8 @@ resource "aws_opensearchserverless_access_policy" "data" {
         }
       ],
       Principal = [
-        module.lambda_ingest.role_arn,
-        module.lambda_query.role_arn
+        aws_lambda_function.ingest.role.arn,
+        aws_lambda_function.query.role.arn
       ]
     }
   ])
