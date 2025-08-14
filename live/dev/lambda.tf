@@ -104,7 +104,7 @@ data "aws_iam_policy_document" "ingest_perms" {
     effect = "Allow"
     actions = ["s3:GetObject","s3:ListBucket"]
     resources = [
-      "arn:aws:s3:::${s3_bucket.rag-documents_bucket.id}"
+      "${aws_s3_bucket.rag-documents_bucket.arn}/*",
     ]
   }
   statement { # Bedrock embeddings
