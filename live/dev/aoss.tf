@@ -1,20 +1,3 @@
-data "aws_caller_identity" "current" {}
-
-variable "project" {
-  type    = string
-  default = "ai-kb"
-}
-
-variable "env" {
-  type    = string
-  default = "dev"
-}
-
-variable "region" {
-  type    = string
-  default = "ap-southeast-2"
-}
-
 locals {
   name             = "${var.project}-${var.env}"
   collection_name  = "${local.name}-kb"
