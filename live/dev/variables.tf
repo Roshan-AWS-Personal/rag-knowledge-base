@@ -36,3 +36,51 @@ variable "region"  {
   type = string
   default = "ap-southeast-2" 
 }
+
+# where your code lives in the repo
+variable "ingest_src_dir"    {
+   type = string  
+   default = "/lambda/ingest" 
+   }
+variable "query_src_dir"     {
+   type = string
+   default = "/lambda/query"
+   }
+
+variable "lambda_runtime"    {
+   type = string
+   default = "python3.12"
+}
+variable "lambda_timeout"    {
+   type = number
+   default = 30
+}         # seconds
+variable "lambda_memory_mb"  {
+   type = number
+   default = 512
+}
+
+# Env for both Lambdas
+variable "bedrock_region"    {
+   type = string
+   default = "us-west-2"
+}
+variable "embed_model_id"    {
+   type = string
+   default = "amazon.titan-embed-text-v2:0"
+}
+variable "chat_model_id"     {
+   type = string
+   default = "anthropic.claude-3-sonnet-20240229-v1:0"
+}
+variable "opensearch_endpoint" {
+   type = string
+} # e.g. https://xxxxx.aoss.ap-southeast-2.amazonaws.com
+variable "index_name"        {
+   type = string
+   default = "chunks"
+}
+variable "embed_dim"         {
+   type = number
+   default = 1024
+}
