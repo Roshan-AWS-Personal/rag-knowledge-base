@@ -159,7 +159,7 @@ resource "aws_cloudwatch_log_group" "query" {
   retention_in_days = 14
 }
 
-resource "aws_lambda_function" "ingest" {
+resource "aws_lambda_function" "lambda_ingest" {
   function_name    = "${local.name}-ingest"
   role             = aws_iam_role.ingest_exec.arn
   runtime          = var.lambda_runtime
@@ -182,7 +182,7 @@ resource "aws_lambda_function" "ingest" {
   depends_on = [aws_cloudwatch_log_group.ingest]
 }
 
-resource "aws_lambda_function" "query" {
+resource "aws_lambda_function" "lambda_query" {
   function_name    = "${local.name}-query"
   role             = aws_iam_role.query_exec.arn
   runtime          = var.lambda_runtime
