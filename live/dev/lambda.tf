@@ -174,7 +174,7 @@ resource "aws_lambda_function" "ingest" {
       BEDROCK_REGION     = var.bedrock_region
       EMBED_MODEL_ID     = var.embed_model_id
       INDEX_NAME         = var.index_name
-      OPENSEARCH_ENDPOINT= var.opensearch_endpoint
+      OPENSEARCH_ENDPOINT= aws_opensearchserverless_collection.kb.collection_endpoint
       EMBED_DIM          = tostring(var.embed_dim)
     }
   }
@@ -197,7 +197,7 @@ resource "aws_lambda_function" "query" {
       BEDROCK_REGION     = var.bedrock_region
       CHAT_MODEL_ID      = var.chat_model_id
       INDEX_NAME         = var.index_name
-      OPENSEARCH_ENDPOINT= var.opensearch_endpoint
+      OPENSEARCH_ENDPOINT= aws_opensearchserverless_collection.kb.collection_endpoint
     }
   }
 

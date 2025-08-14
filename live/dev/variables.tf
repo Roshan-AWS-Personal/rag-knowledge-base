@@ -73,9 +73,7 @@ variable "chat_model_id"     {
    type = string
    default = "anthropic.claude-3-sonnet-20240229-v1:0"
 }
-variable "opensearch_endpoint" {
-   type = string
-} # e.g. https://xxxxx.aoss.ap-southeast-2.amazonaws.com
+
 variable "index_name"        {
    type = string
    default = "chunks"
