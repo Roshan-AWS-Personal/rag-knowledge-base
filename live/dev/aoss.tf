@@ -1,5 +1,4 @@
 locals {
-  name             = "${var.project}-${var.env}"
   collection_name  = "${local.name}-kb"
 }
 
