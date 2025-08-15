@@ -1,51 +1,72 @@
-# lambdas/ingest/app.py
-import os, json, boto3, base64, gzip, io
-from opensearchpy import OpenSearch, RequestsHttpConnection
+import os
+import json
+import boto3
+from botocore.session import Session
+from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 
-BEDROCK_REGION = os.environ["BEDROCK_REGION"]
-EMBED_MODEL_ID = os.environ["EMBED_MODEL_ID"]
-INDEX          = os.environ["INDEX_NAME"]
-OS_ENDPOINT    = os.environ["OPENSEARCH_ENDPOINT"]
+AOSS_ENDPOINT = os.environ["OPENSEARCH_ENDPOINT"]          # e.g., https://xxxx.aoss.ap-southeast-2.amazonaws.com
+INDEX_NAME    = os.environ.get("INDEX_NAME", "chunks")
+EMBED_DIM     = int(os.environ.get("EMBED_DIM", "1024"))
 
-brt = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
-s3  = boto3.client("s3")
+def _aoss_region_from_endpoint(endpoint: str) -> str:
+    # ...aoss.<region>.amazonaws.com
+    host = endpoint.replace("https://", "").split("/")
+    parts = host[0].split(".")
+    # parts = [<id>, "aoss", "<region>", "amazonaws", "com"]
+    return parts[2]
 
-os_client = OpenSearch(
-    hosts=[{"host": OS_ENDPOINT.replace("https://",""), "port": 443}],
-    use_ssl=True, verify_certs=True, connection_class=RequestsHttpConnection
-)
-
-def embed(text: str):
-    body = { "inputText": text }  # adjust to model schema if needed
-    resp = brt.invoke_model(
-        modelId=EMBED_MODEL_ID,
-        body=json.dumps(body),
-        contentType="application/json",
-        accept="application/json"
+def os_client():
+    region = _aoss_region_from_endpoint(AOSS_ENDPOINT)
+    creds  = Session().get_credentials()
+    auth   = AWSV4SignerAuth(creds, region, service="aoss")
+    host   = AOSS_ENDPOINT.replace("https://", "")
+    return OpenSearch(
+        hosts=[{"host": host, "port": 443}],
+        http_auth=auth,
+        use_ssl=True,
+        verify_certs=True,
+        connection_class=RequestsHttpConnection,
+        timeout=30,
     )
-    data = json.loads(resp["body"].read())
-    # normalize: pick the vector field your model returns
-    return data["embedding"] or data["vector"]  # adjust
 
-def handler(event, _ctx):
-    # event from SQS -> records with S3 PutObject notifications
-    for record in event["Records"]:
-        s3evt = json.loads(record["body"])["Records"][0]
-        bkt, key = s3evt["s3"]["bucket"]["name"], s3evt["s3"]["object"]["key"]
-        obj = s3.get_object(Bucket=bkt, Key=key)["Body"].read().decode("utf-8")
+def ensure_index(client: OpenSearch, name: str, dim: int) -> None:
+    if client.indices.exists(index=name):
+        print(f"[ingest] index '{name}' already exists")
+        return
+    body = {
+        "settings": {
+            "index": {
+                "knn": True
+            }
+        },
+        "mappings": {
+            "properties": {
+                "text":   { "type": "text" },
+                "vector": {
+                    "type": "knn_vector",
+                    "dimension": dim,
+                    # Optional: pin the HNSW method (defaults are OK)
+                    # "method": {
+                    #   "name": "hnsw",
+                    #   "engine": "lucene",
+                    #   "space_type": "cosinesimil",
+                    #   "parameters": { "m": 16, "ef_construction": 128 }
+                    # }
+                },
+                "source": { "type": "keyword" },
+                "page":   { "type": "integer" }
+            }
+        }
+    }
+    client.indices.create(index=name, body=body)
+    print(f"[ingest] created index '{name}' (dimension={dim})")
 
-        # naive split (replace with better chunker later)
-        chunks = [obj[i:i+1000] for i in range(0, len(obj), 1000)]
-        docs = []
-        for i, chunk in enumerate(chunks):
-            vec = embed(chunk)
-            docs.append({"id": f"{key}:{i}", "vector": vec, "text": chunk})
+# --- Cold start: get client and ensure index once ---
+_os = os_client()
+ensure_index(_os, INDEX_NAME, EMBED_DIM)
 
-        # bulk upsert (adjust to your index mapping)
-        actions = []
-        for d in docs:
-            actions.append(json.dumps({ "index": {"_index": INDEX, "_id": d["id"]}}))
-            actions.append(json.dumps({ "text": d["text"], "vector": d["vector"]}))
-        body = "\n".join(actions) + "\n"
-        os_client.bulk(body=body)
+def handler(event, context):
+    # For now just prove the S3→SQS→Lambda path and index creation.
+    # Next step we’ll read the S3 object, chunk, embed, and index docs.
+    print("[ingest] event:", json.dumps(event)[:1000])
     return {"ok": True}

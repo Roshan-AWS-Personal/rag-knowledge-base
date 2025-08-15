@@ -82,3 +82,13 @@ variable "embed_dim"         {
    type = number
    default = 1024
 }
+
+variable "s3_prefix" {
+  type    = string
+  default = ""
+}
+
+variable "s3_suffix" {
+  type    = string
+  default = ".txt"
+}
