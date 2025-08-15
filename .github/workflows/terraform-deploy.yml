@@ -78,7 +78,7 @@ jobs:
           echo "STATE_KEY=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate"
 
       - name: Terraform Init
-        working-directory: ${{ steps.env.outputs.WORK_DIR }}
+        working-directory: ${{ steps.select.outputs.WORK_DIR }}  # ✅ matches the 'Select role...' step id
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ env.STATE_BUCKET }}" \
