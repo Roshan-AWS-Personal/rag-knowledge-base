@@ -68,9 +68,10 @@ jobs:
       - name: Who am I?
         run: aws sts get-caller-identity
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: "1.12.2"
+          terraform_version: "1.5.0"
 
       - name: Show backend target
         run: |
