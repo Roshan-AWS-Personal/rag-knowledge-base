@@ -10,8 +10,8 @@ locals {
   ingest_hash     = sha256(join("", [for f in local.ingest_files : filesha256("${local.ingest_abs_src}/${f}")]))
   query_hash      = sha256(join("", [for f in local.query_files  : filesha256("${local.query_abs_src}/${f}")]))
 
-  ingest_build    = "${path.module}/.build/ingest"
-  query_build     = "${path.module}/.build/query"
+  ingest_build    = "${path.module}/lambda/ingest"
+  query_build     = "${path.module}/lambda/query"
 }
 
 # Build step: vendor requirements.txt (if any) + copy sources
