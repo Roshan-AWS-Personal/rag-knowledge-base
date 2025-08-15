@@ -53,14 +53,14 @@ resource "null_resource" "build_query" {
 data "archive_file" "ingest_zip" {
   type        = "zip"
   source_dir  = local.ingest_build
-  output_path = "${path.module}/.build/ingest.zip"
+  output_path = "${path.module}/lambda/ingest.zip"
   depends_on  = [null_resource.build_ingest]
 }
 
 data "archive_file" "query_zip" {
   type        = "zip"
   source_dir  = local.query_build
-  output_path = "${path.module}/.build/query.zip"
+  output_path = "${path.module}/lambda/query.zip"
   depends_on  = [null_resource.build_query]
 }
 
