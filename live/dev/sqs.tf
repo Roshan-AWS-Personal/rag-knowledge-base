@@ -1,10 +1,12 @@
 resource "aws_sqs_queue" "ingest_dlq" {
   name                      = "${local.name}-ingest-dlq"
+  visibility_timeout_seconds = 90
   message_retention_seconds = 1209600
 }
 
 resource "aws_sqs_queue" "ingest_queue" {
   name = "${local.name}-ingest-queue"
+  visibility_timeout_seconds = 90
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.ingest_dlq.arn
