@@ -68,10 +68,13 @@ jobs:
       - name: Who am I?
         run: aws sts get-caller-identity
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.8.5"
+          terraform_version: "1.12.2"
+
+      - name: Show backend target
+        run: |
+          echo "STATE_KEY=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate"
 
       - name: Terraform Init
         working-directory: ${{ steps.select.outputs.WORK_DIR }}
@@ -80,7 +83,7 @@ jobs:
             -backend-config="bucket=${{ env.STATE_BUCKET }}" \
             -backend-config="key=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate" \
             -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ env.DYNAMODB_TABLE }}"
+            -backend-config="use_lockfile=true"
 
       - name: Terraform Validate
         working-directory: ${{ steps.select.outputs.WORK_DIR }}
@@ -88,8 +91,10 @@ jobs:
 
       - name: Terraform Plan
         working-directory: ${{ steps.select.outputs.WORK_DIR }}
+        env:
+          TF_LOG: INFO
         run: |
-          terraform plan \
+          terraform plan -lock-timeout=2m \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="state_bucket=${{ env.STATE_BUCKET }}" \
             -var="state_prefix=${{ env.STATE_PREFIX }}" \

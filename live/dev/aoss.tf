@@ -1,14 +1,28 @@
+# aoss.tf
+
+data "aws_caller_identity" "current" {}
+
+variable "project" {
+  type    = string
+  default = "ai-kb"
+}
+
+variable "env" {
+  type    = string
+  default = "dev"
+}
+
+variable "region" {
+  type    = string
+  default = "ap-southeast-2"
+}
+
 locals {
-  collection_name  = "${local.name}-kb"
+  name            = "${var.project}-${var.env}"
+  collection_name = "${local.name}-kb"
 }
 
-# --- The collection itself (VECTORSEARCH) ---
-resource "aws_opensearchserverless_collection" "kb" {
-  name = local.collection_name
-  type = "VECTORSEARCH"
-}
-
-# --- Encryption policy (use AWS-owned key for dev; swap to KMS for prod) ---
+# --- Encryption policy MUST exist before the collection ---
 resource "aws_opensearchserverless_security_policy" "encryption" {
   name = "${local.name}-enc"
   type = "encryption"
@@ -17,14 +31,15 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
     Rules = [
       {
         ResourceType = "collection",
-        Resource     = ["collection/${aws_opensearchserverless_collection.kb.name}"]
+        # Reference the literal name, not a resource attribute
+        Resource     = ["collection/${local.collection_name}"]
       }
     ],
     AWSOwnedKey = true
   })
 }
 
-# --- Network policy (dev: public; tighten later to VPCE or CIDRs) ---
+# --- Network policy (public for dev; tighten later) ---
 resource "aws_opensearchserverless_security_policy" "network" {
   name = "${local.name}-net"
   type = "network"
@@ -33,19 +48,30 @@ resource "aws_opensearchserverless_security_policy" "network" {
     Rules = [
       {
         ResourceType = "collection",
-        Resource     = ["collection/${aws_opensearchserverless_collection.kb.name}"]
+        Resource     = ["collection/${local.collection_name}"]
       },
       {
         ResourceType = "dashboard",
-        Resource     = ["collection/${aws_opensearchserverless_collection.kb.name}"]
+        Resource     = ["collection/${local.collection_name}"]
       }
     ],
     AllowFromPublic = true
   })
 }
 
-# --- Data access policy: let your Lambda roles call AOSS APIs ---
-# If your lambda module outputs are named differently, update the Principals below.
+# --- Collection (create AFTER policies) ---
+resource "aws_opensearchserverless_collection" "kb" {
+  name = local.collection_name
+  type = "VECTORSEARCH"
+
+  depends_on = [
+    aws_opensearchserverless_security_policy.encryption,
+    aws_opensearchserverless_security_policy.network
+  ]
+}
+
+# --- Data access policy: allow your Lambda roles ---
+# If you created the lambdas as resources named aws_lambda_function.ingest/query:
 resource "aws_opensearchserverless_access_policy" "data" {
   name = "${local.name}-data"
   type = "data"
@@ -55,11 +81,11 @@ resource "aws_opensearchserverless_access_policy" "data" {
       Description = "Lambda access for ingest + query",
       Rules = [
         {
-          Resource   = ["collection/${aws_opensearchserverless_collection.kb.name}"],
+          Resource   = ["collection/${local.collection_name}"],
           Permission = ["aoss:DescribeCollectionItems"]
         },
         {
-          Resource   = ["index/${aws_opensearchserverless_collection.kb.name}/*"],
+          Resource   = ["index/${local.collection_name}/*"],
           Permission = [
             "aoss:CreateIndex",
             "aoss:DeleteIndex",
@@ -70,15 +96,17 @@ resource "aws_opensearchserverless_access_policy" "data" {
           ]
         }
       ],
+      # Use the LAMBDA ROLE ARNs (not function ARNs)
       Principal = [
         aws_lambda_function.ingest.role,
         aws_lambda_function.query.role
       ]
     }
   ])
+
+  depends_on = [aws_opensearchserverless_collection.kb]
 }
 
-# Helpful outputs
 output "aoss_endpoint" {
   description = "Collection endpoint URL"
   value       = aws_opensearchserverless_collection.kb.collection_endpoint
