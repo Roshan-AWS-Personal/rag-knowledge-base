@@ -78,13 +78,13 @@ jobs:
           echo "STATE_KEY=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate"
 
       - name: Terraform Init
-        working-directory: ${{ steps.select.outputs.WORK_DIR }}
+        working-directory: ${{ steps.env.outputs.WORK_DIR }}
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ env.STATE_BUCKET }}" \
             -backend-config="key=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate" \
             -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="use_lockfile=true"
+            -backend-config="dynamodb_table=${{ env.DYNAMODB_TABLE }}"
 
       - name: Terraform Validate
         working-directory: ${{ steps.select.outputs.WORK_DIR }}
