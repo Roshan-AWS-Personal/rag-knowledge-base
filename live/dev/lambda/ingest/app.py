@@ -1,72 +1,74 @@
-import os
-import json
-import boto3
+# lambda/ingest/app.py
+import os, json
 from botocore.session import Session
-from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+from botocore.awsrequest import AWSRequest
+from botocore.auth import SigV4Auth
+import urllib.request
 
-AOSS_ENDPOINT = os.environ["OPENSEARCH_ENDPOINT"]          # e.g., https://xxxx.aoss.ap-southeast-2.amazonaws.com
+AOSS_ENDPOINT = os.environ["OPENSEARCH_ENDPOINT"]   # e.g., https://xxxxx.aoss.ap-southeast-2.amazonaws.com
 INDEX_NAME    = os.environ.get("INDEX_NAME", "chunks")
 EMBED_DIM     = int(os.environ.get("EMBED_DIM", "1024"))
 
-def _aoss_region_from_endpoint(endpoint: str) -> str:
-    # ...aoss.<region>.amazonaws.com
-    host = endpoint.replace("https://", "").split("/")
-    parts = host[0].split(".")
-    # parts = [<id>, "aoss", "<region>", "amazonaws", "com"]
+def _region_from_endpoint(endpoint: str) -> str:
+    host = endpoint.replace("https://", "").split("/")[0]
+    parts = host.split(".")  # [id, 'aoss', '<region>', 'amazonaws', 'com']
     return parts[2]
 
-def os_client():
-    region = _aoss_region_from_endpoint(AOSS_ENDPOINT)
-    creds  = Session().get_credentials()
-    auth   = AWSV4SignerAuth(creds, region, service="aoss")
-    host   = AOSS_ENDPOINT.replace("https://", "")
-    return OpenSearch(
-        hosts=[{"host": host, "port": 443}],
-        http_auth=auth,
-        use_ssl=True,
-        verify_certs=True,
-        connection_class=RequestsHttpConnection,
-        timeout=30,
+def _signed_request(method: str, url: str, body: bytes | None, region: str):
+    creds = Session().get_credentials().get_frozen_credentials()
+    req   = AWSRequest(method=method, url=url, data=body, headers={"content-type":"application/json"})
+    SigV4Auth(creds, "aoss", region).add_auth(req)
+    prepared = req.prepare()
+    http_req = urllib.request.Request(
+        url=prepared.url,
+        data=prepared.body,
+        method=prepared.method,
+        headers=dict(prepared.headers),
     )
+    return urllib.request.urlopen(http_req)  # raises on non-2xx
 
-def ensure_index(client: OpenSearch, name: str, dim: int) -> None:
-    if client.indices.exists(index=name):
-        print(f"[ingest] index '{name}' already exists")
+def ensure_index():
+    region = _region_from_endpoint(AOSS_ENDPOINT)
+    head_url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}"
+    try:
+        _signed_request("HEAD", head_url, None, region)
+        print(f"[ingest] index '{INDEX_NAME}' already exists")
         return
+    except Exception as e:
+        # 404 → create it; anything else re-raise
+        if "404" not in str(e):
+            print(f"[ingest] HEAD failed: {e}")
+            raise
+
     body = {
-        "settings": {
-            "index": {
-                "knn": True
-            }
-        },
+        "settings": { "index": { "knn": True } },
         "mappings": {
             "properties": {
                 "text":   { "type": "text" },
                 "vector": {
                     "type": "knn_vector",
-                    "dimension": dim,
-                    # Optional: pin the HNSW method (defaults are OK)
-                    # "method": {
-                    #   "name": "hnsw",
-                    #   "engine": "lucene",
-                    #   "space_type": "cosinesimil",
-                    #   "parameters": { "m": 16, "ef_construction": 128 }
-                    # }
+                    "dimension": EMBED_DIM,
+                    # Pin cosine; defaults can vary by version
+                    "method": {
+                        "name": "hnsw",
+                        "engine": "lucene",
+                        "space_type": "cosinesimil",
+                        "parameters": { "m": 16, "ef_construction": 128 }
+                    }
                 },
                 "source": { "type": "keyword" },
                 "page":   { "type": "integer" }
             }
         }
     }
-    client.indices.create(index=name, body=body)
-    print(f"[ingest] created index '{name}' (dimension={dim})")
+    put_url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}"
+    _signed_request("PUT", put_url, json.dumps(body).encode("utf-8"), region)
+    print(f"[ingest] created index '{INDEX_NAME}' (dim={EMBED_DIM})")
 
-# --- Cold start: get client and ensure index once ---
-_os = os_client()
-ensure_index(_os, INDEX_NAME, EMBED_DIM)
+# Cold start: ensure index
+ensure_index()
 
-def handler(event, context):
-    # For now just prove the S3→SQS→Lambda path and index creation.
-    # Next step we’ll read the S3 object, chunk, embed, and index docs.
-    print("[ingest] event:", json.dumps(event)[:1000])
+def handler(event, _ctx):
+    # we’ll add chunking/embedding next
+    print("[ingest] got event (truncated):", str(event)[:800])
     return {"ok": True}
