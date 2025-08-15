@@ -1,27 +1,5 @@
 # aoss.tf
 
-data "aws_caller_identity" "current" {}
-
-variable "project" {
-  type    = string
-  default = "ai-kb"
-}
-
-variable "env" {
-  type    = string
-  default = "dev"
-}
-
-variable "region" {
-  type    = string
-  default = "ap-southeast-2"
-}
-
-locals {
-  name            = "${var.project}-${var.env}"
-  collection_name = "${local.name}-kb"
-}
-
 # --- Encryption policy MUST exist before the collection ---
 resource "aws_opensearchserverless_security_policy" "encryption" {
   name = "${local.name}-enc"
@@ -32,7 +10,7 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
       {
         ResourceType = "collection",
         # Reference the literal name, not a resource attribute
-        Resource     = ["collection/${local.collection_name}"]
+        Resource     = ["collection/${local.name}"]
       }
     ],
     AWSOwnedKey = true
@@ -48,11 +26,11 @@ resource "aws_opensearchserverless_security_policy" "network" {
     Rules = [
       {
         ResourceType = "collection",
-        Resource     = ["collection/${local.collection_name}"]
+        Resource     = ["collection/${local.name}"]
       },
       {
         ResourceType = "dashboard",
-        Resource     = ["collection/${local.collection_name}"]
+        Resource     = ["collection/${local.name}"]
       }
     ],
     AllowFromPublic = true
@@ -61,7 +39,7 @@ resource "aws_opensearchserverless_security_policy" "network" {
 
 # --- Collection (create AFTER policies) ---
 resource "aws_opensearchserverless_collection" "kb" {
-  name = local.collection_name
+  name = local.name
   type = "VECTORSEARCH"
 
   depends_on = [
@@ -81,11 +59,11 @@ resource "aws_opensearchserverless_access_policy" "data" {
       Description = "Lambda access for ingest + query",
       Rules = [
         {
-          Resource   = ["collection/${local.collection_name}"],
+          Resource   = ["collection/${local.name}"],
           Permission = ["aoss:DescribeCollectionItems"]
         },
         {
-          Resource   = ["index/${local.collection_name}/*"],
+          Resource   = ["index/${local.name}/*"],
           Permission = [
             "aoss:CreateIndex",
             "aoss:DeleteIndex",
