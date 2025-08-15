@@ -17,24 +17,26 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
   })
 }
 
-# --- Network policy (public for dev; tighten later) ---
+# --- Network policy (MUST be an array) ---
 resource "aws_opensearchserverless_security_policy" "network" {
   name = "${local.name}-net"
   type = "network"
 
-  policy = jsonencode({
-    Rules = [
-      {
-        ResourceType = "collection",
-        Resource     = ["collection/${local.name}"]
-      },
-      {
-        ResourceType = "dashboard",
-        Resource     = ["collection/${local.name}"]
-      }
-    ],
-    AllowFromPublic = true
-  })
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          ResourceType = "collection",
+          Resource     = ["collection/${local.name}"]
+        },
+        {
+          ResourceType = "dashboard",
+          Resource     = ["collection/${local.name}"]
+        }
+      ],
+      AllowFromPublic = true
+    }
+  ])
 }
 
 # --- Collection (create AFTER policies) ---
