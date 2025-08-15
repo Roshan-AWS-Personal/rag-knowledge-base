@@ -51,7 +51,6 @@ resource "aws_opensearchserverless_collection" "kb" {
 }
 
 # --- Data access policy: allow your Lambda roles ---
-# If you created the lambdas as resources named aws_lambda_function.ingest/query:
 resource "aws_opensearchserverless_access_policy" "data" {
   name = "${local.name}-data"
   type = "data"
@@ -61,12 +60,14 @@ resource "aws_opensearchserverless_access_policy" "data" {
       Description = "Lambda access for ingest + query",
       Rules = [
         {
-          Resource   = ["collection/${local.name}"],
-          Permission = ["aoss:DescribeCollectionItems"]
+          ResourceType = "collection",
+          Resource     = ["collection/${local.name}"],
+          Permission   = ["aoss:DescribeCollectionItems"]
         },
         {
-          Resource   = ["index/${local.name}/*"],
-          Permission = [
+          ResourceType = "index",
+          Resource     = ["index/${local.name}/*"],
+          Permission   = [
             "aoss:CreateIndex",
             "aoss:DeleteIndex",
             "aoss:UpdateIndex",
@@ -76,7 +77,7 @@ resource "aws_opensearchserverless_access_policy" "data" {
           ]
         }
       ],
-      # Use the LAMBDA ROLE ARNs (not function ARNs)
+      # Use ROLE ARNs (execution roles), not function ARNs
       Principal = [
         aws_lambda_function.ingest.role,
         aws_lambda_function.query.role
