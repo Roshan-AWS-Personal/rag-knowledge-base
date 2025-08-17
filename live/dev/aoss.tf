@@ -50,41 +50,38 @@ resource "aws_opensearchserverless_collection" "kb" {
   ]
 }
 
+# aoss.tf (replace your aws_opensearchserverless_access_policy.data)
 resource "aws_opensearchserverless_access_policy" "data" {
   name = "${local.name}-data"
   type = "data"
 
-  policy = jsonencode([{
-    Description = "Lambda access for ingest + query",
-    Rules = [
-      # Allow REST API calls against this collection endpoint
-      {
-        ResourceType = "collection",
-        Resource     = ["collection/${local.name}"],
-        Permission   = ["aoss:APIAccessAll", "aoss:DescribeCollectionItems"]
-      },
-      # Allow index CRUD and document R/W inside this collection
-      {
-        ResourceType = "index",
-        Resource     = ["index/${local.name}/*"],
-        Permission   = [
-          "aoss:CreateIndex",
-          "aoss:DeleteIndex",
-          "aoss:UpdateIndex",
-          "aoss:DescribeIndex",
-          "aoss:ReadDocument",
-          "aoss:WriteDocument"
-        ]
-      }
-    ],
-    Principal = [
-      aws_iam_role.ingest_exec.arn,
-      aws_iam_role.query_exec.arn
-    ]
-  }])
+  policy = jsonencode([
+    {
+      Description = "Lambda data access on indices (broad to unblock)",
+      Rules = [
+        {
+          # Provider expects index here
+          ResourceType = "index",
+          Resource     = ["index/${local.name}/*"],
+          Permission   = ["aoss:*"]   # can tighten later
+        }
+        # If provider *still* complains (older model), uncomment this extra rule:
+        #,{
+        #  ResourceType = "model",
+        #  Resource     = ["model/${local.name}/*"],
+        #  Permission   = ["aoss:*"]
+        #}
+      ],
+      Principal = [
+        aws_iam_role.ingest_exec.arn,
+        aws_iam_role.query_exec.arn
+      ]
+    }
+  ])
 
   depends_on = [aws_opensearchserverless_collection.kb]
 }
+
 
 
 
