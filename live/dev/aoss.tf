@@ -50,7 +50,6 @@ resource "aws_opensearchserverless_collection" "kb" {
   ]
 }
 
-# --- Data access policy: allow your Lambda roles ---
 resource "aws_opensearchserverless_access_policy" "data" {
   name = "${local.name}-data"
   type = "data"
@@ -58,14 +57,13 @@ resource "aws_opensearchserverless_access_policy" "data" {
   policy = jsonencode([{
     Description = "Lambda access for ingest + query",
     Rules = [
+      # Allow REST API calls against this collection endpoint
       {
         ResourceType = "collection",
         Resource     = ["collection/${local.name}"],
-        Permission   = [
-          "aoss:APIAccessAll",
-          "aoss:DescribeCollectionItems"
-        ]
+        Permission   = ["aoss:APIAccessAll", "aoss:DescribeCollectionItems"]
       },
+      # Allow index CRUD and document R/W inside this collection
       {
         ResourceType = "index",
         Resource     = ["index/${local.name}/*"],
@@ -79,15 +77,15 @@ resource "aws_opensearchserverless_access_policy" "data" {
         ]
       }
     ],
-    # Use execution role ARNs
     Principal = [
-      aws_lambda_function.ingest.role,
-      aws_lambda_function.query.role
+      aws_iam_role.ingest_exec.arn,
+      aws_iam_role.query_exec.arn
     ]
   }])
 
   depends_on = [aws_opensearchserverless_collection.kb]
 }
+
 
 
 output "aoss_endpoint" {

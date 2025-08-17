@@ -16,9 +16,9 @@ resource "aws_iam_role" "ingest_exec" {
   })
 }
 
-resource "aws_iam_policy_attachment" "ingest_logs" {
-  name       = "${local.name}-ingest-logs"
-  roles      = [aws_iam_role.ingest_exec.name]
+# NEW (stable)
+resource "aws_iam_role_policy_attachment" "ingest_logs" {
+  role       = aws_iam_role.ingest_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
@@ -124,9 +124,8 @@ resource "aws_iam_role" "query_exec" {
 }
 
 # Basic logging
-resource "aws_iam_policy_attachment" "query_logs" {
-  name       = "${local.name}-query-logs"
-  roles      = [aws_iam_role.query_exec.name]
+resource "aws_iam_role_policy_attachment" "query_logs" {
+  role       = aws_iam_role.query_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
