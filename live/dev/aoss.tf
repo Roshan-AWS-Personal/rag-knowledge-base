@@ -55,38 +55,40 @@ resource "aws_opensearchserverless_access_policy" "data" {
   name = "${local.name}-data"
   type = "data"
 
-  policy = jsonencode([
-    {
-      Description = "Lambda access for ingest + query",
-      Rules = [
-        {
-          ResourceType = "collection",
-          Resource     = ["collection/${local.name}"],
-          Permission   = ["aoss:DescribeCollectionItems", "aoss:APIAccessAll"]
-        },
-        {
-          ResourceType = "index",
-          Resource     = ["index/${local.name}/*"],
-          Permission   = [
-            "aoss:CreateIndex",
-            "aoss:DeleteIndex",
-            "aoss:UpdateIndex",
-            "aoss:DescribeIndex",
-            "aoss:ReadDocument",
-            "aoss:WriteDocument"
-          ]
-        }
-      ],
-      # Use ROLE ARNs (execution roles), not function ARNs
-      Principal = [
-        aws_lambda_function.ingest.role,
-        aws_lambda_function.query.role
-      ]
-    }
-  ])
+  policy = jsonencode([{
+    Description = "Lambda access for ingest + query",
+    Rules = [
+      {
+        ResourceType = "collection",
+        Resource     = ["collection/${local.name}"],
+        Permission   = [
+          "aoss:APIAccessAll",
+          "aoss:DescribeCollectionItems"
+        ]
+      },
+      {
+        ResourceType = "index",
+        Resource     = ["index/${local.name}/*"],
+        Permission   = [
+          "aoss:CreateIndex",
+          "aoss:DeleteIndex",
+          "aoss:UpdateIndex",
+          "aoss:DescribeIndex",
+          "aoss:ReadDocument",
+          "aoss:WriteDocument"
+        ]
+      }
+    ],
+    # Use execution role ARNs
+    Principal = [
+      aws_lambda_function.ingest.role,
+      aws_lambda_function.query.role
+    ]
+  }])
 
   depends_on = [aws_opensearchserverless_collection.kb]
 }
+
 
 output "aoss_endpoint" {
   description = "Collection endpoint URL"
