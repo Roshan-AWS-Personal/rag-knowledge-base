@@ -62,7 +62,7 @@ resource "aws_opensearchserverless_access_policy" "data" {
         {
           ResourceType = "collection",
           Resource     = ["collection/${local.name}"],
-          Permission   = ["aoss:DescribeCollectionItems"]
+          Permission   = ["aoss:DescribeCollectionItems", "aoss:APIAccessAll"]
         },
         {
           ResourceType = "index",
