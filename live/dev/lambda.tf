@@ -70,6 +70,7 @@ resource "aws_lambda_function" "ingest" {
       OPENSEARCH_ENDPOINT = aws_opensearchserverless_collection.kb.collection_endpoint
       INDEX_NAME          = "chunks"
       EMBED_DIM           = "1024"
+      SKIP_AOSS           = "0"
       # we’ll add BEDROCK_REGION/EMBED_MODEL_ID later when we embed
     }
   }
