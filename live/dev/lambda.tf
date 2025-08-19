@@ -75,7 +75,7 @@ resource "aws_lambda_function" "ingest" {
   role          = aws_iam_role.ingest_exec.arn
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.11"
-  filename      = "${path.module}/lambdas/ingest.zip"
+  filename      = "${path.module}/lambda/ingest.zip"
   timeout       = 60
 }
 
@@ -122,6 +122,6 @@ resource "aws_lambda_function" "query" {
   role          = aws_iam_role.query_exec.arn
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.11"
-  filename      = "${path.module}/lambdas/query.zip"
+  filename      = "${path.module}/lambda/query.zip"
   timeout       = 60
 }
