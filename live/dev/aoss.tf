@@ -2,7 +2,7 @@
 # aoss.tf — policies + collection
 ################################
 
-# --- Encryption policy (MUST exist before the collection) ---
+# --- Encryption policy MUST exist before the collection ---
 resource "aws_opensearchserverless_security_policy" "encryption" {
   name = "${local.name}-enc"
   type = "encryption"
@@ -11,15 +11,14 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
     Rules = [
       {
         ResourceType = "collection",
-        # IMPORTANT: reference the literal collection name, not the resource
-        Resource     = ["collection/${local.name}"]
+        Resource     = ["collection/${local.name}"]  # literal name
       }
     ],
     AWSOwnedKey = true
   })
 }
 
-# --- Network policy (policy payload MUST be an array) ---
+# --- Network policy (payload MUST be an array) ---
 resource "aws_opensearchserverless_security_policy" "network" {
   name = "${local.name}-net"
   type = "network"
@@ -27,17 +26,10 @@ resource "aws_opensearchserverless_security_policy" "network" {
   policy = jsonencode([
     {
       Rules = [
-        {
-          ResourceType = "collection",
-          Resource     = ["collection/${local.name}"]
-        },
-        {
-          ResourceType = "dashboard",
-          Resource     = ["collection/${local.name}"]
-        }
+        { ResourceType = "collection", Resource = ["collection/${local.name}"] },
+        { ResourceType = "dashboard",  Resource = ["collection/${local.name}"] }
       ],
-      # Public is fine for dev; lock this down later with VPC endpoints
-      AllowFromPublic = true
+      AllowFromPublic = true  # OK for dev; tighten later
     }
   ])
 }
@@ -53,8 +45,7 @@ resource "aws_opensearchserverless_collection" "kb" {
   ]
 }
 
-# --- Data access policy: allow Lambda roles to create/read/write indices ---
-# Keep broad for now; scope to specific index ("chunks") later if you prefer.
+# --- Data access policy (corrected permissions) ---
 resource "aws_opensearchserverless_access_policy" "data" {
   name = "${local.name}-data"
   type = "data"
@@ -62,19 +53,20 @@ resource "aws_opensearchserverless_access_policy" "data" {
   policy = jsonencode([{
     Description = "Lambda data access on indices for ${local.name}"
     Rules = [
-      # Index-level permissions (covers create/write/read/delete)
+      # INDEX permissions — no DeleteDocument; use DeleteIndex/UpdateIndex
       {
         ResourceType = "index",
         Resource     = ["index/${local.name}/*"],
         Permission   = [
-          "aoss:CreateIndex",
-          "aoss:DescribeIndex",
           "aoss:ReadDocument",
           "aoss:WriteDocument",
-          "aoss:DeleteDocument"
+          "aoss:CreateIndex",
+          "aoss:UpdateIndex",
+          "aoss:DeleteIndex",
+          "aoss:DescribeIndex"
         ]
       },
-      # Optional but helpful: allow describing items in the collection
+      # COLLECTION items describe — helpful for clients
       {
         ResourceType = "collection",
         Resource     = ["collection/${local.name}"],
