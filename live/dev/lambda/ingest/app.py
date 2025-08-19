@@ -68,7 +68,14 @@ def _signed_request(method: str, url: str, body, region: str):
             hint = e.headers.get("x-aoss-response-hint")
         except Exception:
             pass
+        body_txt = ""
+        try:
+            body_txt = e.read().decode("utf-8", "ignore")
+        except Exception:
+            pass
         print(f"[ingest] {method} {url} -> {e.code} {e.reason} (hint={hint})")
+        if body_txt:
+            print("[ingest] error body:", body_txt[:4000])
         raise
 
 def _verify_index_exists():
@@ -111,15 +118,17 @@ def ensure_index():
     # 2) Try explicit create (PUT /{index})
     try:
         body = {
-            "settings": {"index": {"knn": True}},
-            "mappings": {"properties": {
-                "text":   {"type": "text"},
-                "vector": {"type": "knn_vector", "dimension": EMBED_DIM,
-                           "method": {"name":"hnsw","engine":"lucene","space_type":"cosinesimil",
-                                      "parameters":{"m":16,"ef_construction":128}}},
-                "source": {"type": "keyword"},
-                "page":   {"type": "integer"}
-            }}
+            "settings": {
+                "index.knn": True
+            },
+            "mappings": {
+                "properties": {
+                    "text":   {"type": "text"},
+                    "vector": {"type": "knn_vector", "dimension": EMBED_DIM},
+                    "source": {"type": "keyword"},
+                    "page":   {"type": "integer"}
+                }
+            }
         }
         _signed_request("PUT", f"{base}/{INDEX_NAME}", json.dumps(body).encode("utf-8"), region)
         print(f"[ingest] created index '{INDEX_NAME}' via PUT")
