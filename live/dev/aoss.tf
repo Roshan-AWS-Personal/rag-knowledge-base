@@ -1,6 +1,8 @@
-# aoss.tf
+################################
+# aoss.tf — policies + collection
+################################
 
-# --- Encryption policy MUST exist before the collection ---
+# --- Encryption policy (MUST exist before the collection) ---
 resource "aws_opensearchserverless_security_policy" "encryption" {
   name = "${local.name}-enc"
   type = "encryption"
@@ -9,7 +11,7 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
     Rules = [
       {
         ResourceType = "collection",
-        # Reference the literal name, not a resource attribute
+        # IMPORTANT: reference the literal collection name, not the resource
         Resource     = ["collection/${local.name}"]
       }
     ],
@@ -17,7 +19,7 @@ resource "aws_opensearchserverless_security_policy" "encryption" {
   })
 }
 
-# --- Network policy (MUST be an array) ---
+# --- Network policy (policy payload MUST be an array) ---
 resource "aws_opensearchserverless_security_policy" "network" {
   name = "${local.name}-net"
   type = "network"
@@ -34,23 +36,36 @@ resource "aws_opensearchserverless_security_policy" "network" {
           Resource     = ["collection/${local.name}"]
         }
       ],
+      # Public is fine for dev; lock this down later with VPC endpoints
       AllowFromPublic = true
     }
   ])
 }
 
-# === AOSS data access policy: allow ingest role to create/read/write the index ===
-resource "aws_opensearchserverless_access_policy" "kb_data_access" {
-  name = "kb-data-access"
+# --- Collection (create AFTER policies) ---
+resource "aws_opensearchserverless_collection" "kb" {
+  name = local.name
+  type = "VECTORSEARCH"
+
+  depends_on = [
+    aws_opensearchserverless_security_policy.encryption,
+    aws_opensearchserverless_security_policy.network
+  ]
+}
+
+# --- Data access policy: allow Lambda roles to create/read/write indices ---
+# Keep broad for now; scope to specific index ("chunks") later if you prefer.
+resource "aws_opensearchserverless_access_policy" "data" {
+  name = "${local.name}-data"
   type = "data"
 
-  policy = jsonencode({
-    Description = "Allow ingest lambda to manage/read/write the kb indexes"
+  policy = jsonencode([{
+    Description = "Lambda data access on indices for ${local.name}"
     Rules = [
-      # Index-level permissions (all indexes in this collection, or scope to 'chunks' if you want)
+      # Index-level permissions (covers create/write/read/delete)
       {
-        ResourceType = "index"
-        Resource     = ["index/${aws_opensearchserverless_collection.kb.name}/*"]
+        ResourceType = "index",
+        Resource     = ["index/${local.name}/*"],
         Permission   = [
           "aoss:CreateIndex",
           "aoss:DescribeIndex",
@@ -59,27 +74,23 @@ resource "aws_opensearchserverless_access_policy" "kb_data_access" {
           "aoss:DeleteDocument"
         ]
       },
-      # Collection-level describe is commonly needed for clients
+      # Optional but helpful: allow describing items in the collection
       {
-        ResourceType = "collection"
-        Resource     = ["collection/${aws_opensearchserverless_collection.kb.name}"]
-        Permission   = [
-          "aoss:DescribeCollectionItems"
-        ]
+        ResourceType = "collection",
+        Resource     = ["collection/${local.name}"],
+        Permission   = ["aoss:DescribeCollectionItems"]
       }
-    ]
+    ],
     Principal = [
       aws_iam_role.ingest_exec.arn,
       aws_iam_role.query_exec.arn
     ]
-  })
+  }])
+
+  depends_on = [aws_opensearchserverless_collection.kb]
 }
 
-
-
-
-
-
+# --- Outputs ---
 output "aoss_endpoint" {
   description = "Collection endpoint URL"
   value       = aws_opensearchserverless_collection.kb.collection_endpoint
