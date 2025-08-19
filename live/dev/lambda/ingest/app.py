@@ -19,30 +19,61 @@ def _region_from_endpoint(endpoint: str) -> str:
     return os.environ.get("AWS_REGION", "ap-southeast-2")
 
 def _signed_request(method: str, url: str, body, region: str):
+    # Normalize body for hashing/signing
+    if body is None:
+        body = b""
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+
+    # AOSS requires x-amz-content-sha256 with the *actual* payload hash
+    payload_hash = hashlib.sha256(body).hexdigest()
+
     creds = Session().get_credentials().get_frozen_credentials()
-    req   = AWSRequest(method=method, url=url, data=body,
-                       headers={"content-type": "application/json"})
+
+    # Build minimal, canonical headers
+    host = urlparse(url).netloc
+    base_headers = {
+        "host": host,
+        "content-type": "application/json",
+        "x-amz-content-sha256": payload_hash,
+    }
+
+    # Sign with SigV4 for service 'aoss' in the exact region
+    req = AWSRequest(method=method, url=url, data=body, headers=base_headers)
     SigV4Auth(creds, "aoss", region).add_auth(req)
+
+    # Prepare request (botocore canonicalizes headers here)
     p = req.prepare()
-    r = urllib.request.Request(p.url, data=p.body, method=p.method,
-                               headers=dict(p.headers))
+
+    # DO NOT sign or send a stale Content-Length; let urllib compute it.
+    send_headers = dict(p.headers)
+    send_headers.pop("Content-Length", None)
+    send_headers.pop("content-length", None)
+
+    # Debug: log SignedHeaders and x-amz-content-sha256 actually used
+    auth_hdr = send_headers.get("Authorization", "")
+    sh = ""
+    if "SignedHeaders=" in auth_hdr:
+        sh = auth_hdr.split("SignedHeaders=")[-1].split(",")[0]
+    print(f"[sigv4] region={region} host={host} SignedHeaders={sh} x-amz-content-sha256={send_headers.get('x-amz-content-sha256')}")
+
+    r = urllib.request.Request(p.url, data=body, method=p.method, headers=send_headers)
     try:
         return urllib.request.urlopen(r)
     except urllib.error.HTTPError as e:
-        # Log status + reason and a hint header AOSS returns
         hint = None
         try:
             hint = e.headers.get("x-aoss-response-hint")
         except Exception:
             pass
-        print(f"[ingest] {method} {url} -> {e.code} {e.reason}",
-              f"(hint={hint})")
+        print(f"[ingest] {method} {url} -> {e.code} {e.reason} (hint={hint})")
         raise
 
 def _verify_index_exists():
     region = _region_from_endpoint(AOSS_ENDPOINT)
     url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}"
     resp = _signed_request("GET", url, None, region)
+    print(f"[ingest] endpoint={AOSS_ENDPOINT} derived_region={_region_from_endpoint(AOSS_ENDPOINT)}")
     print("[ingest] GET index ok, status:", getattr(resp, "status", "ok"))
 
 def _index_dummy_doc():
