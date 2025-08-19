@@ -1,5 +1,7 @@
 # lambda/ingest/app.py
 import os, json, urllib.request, urllib.error
+import hashlib
+from urllib.parse import urlparse
 from botocore.session import Session
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
