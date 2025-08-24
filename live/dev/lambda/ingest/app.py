@@ -1,18 +1,25 @@
 # lambda/ingest/app.py
 import os, json, urllib.request, urllib.error
 import hashlib
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote_plus
 from botocore.session import Session
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
+import botocore
+from botocore.exceptions import ClientError
 
+# S3 client (uses Lambda's execution role / env region)
+s3 = Session().create_client("s3")
+
+# ---- Config from environment ----
 AOSS_ENDPOINT = os.environ.get("OPENSEARCH_ENDPOINT", "")
 INDEX_NAME    = os.environ.get("INDEX_NAME", "chunks")
 EMBED_DIM     = int(os.environ.get("EMBED_DIM", "1024"))
 SKIP_AOSS     = os.environ.get("SKIP_AOSS", "0") == "1"
 
-_index_checked = False  # container-level guard
+_index_checked = False  # run ensure_index() once per warm container
 
+# ---- Helpers ----
 def _region_from_endpoint(endpoint: str) -> str:
     host = endpoint.replace("https://", "").split("/")[0]
     parts = host.split(".")
@@ -29,10 +36,8 @@ def _signed_request(method: str, url: str, body, region: str):
 
     # AOSS requires x-amz-content-sha256 with the *actual* payload hash
     payload_hash = hashlib.sha256(body).hexdigest()
-
     creds = Session().get_credentials().get_frozen_credentials()
 
-    # Build minimal, canonical headers
     host = urlparse(url).netloc
     base_headers = {
         "host": host,
@@ -40,19 +45,17 @@ def _signed_request(method: str, url: str, body, region: str):
         "x-amz-content-sha256": payload_hash,
     }
 
-    # Sign with SigV4 for service 'aoss' in the exact region
+    # SigV4 for service 'aoss' in the exact region
     req = AWSRequest(method=method, url=url, data=body, headers=base_headers)
     SigV4Auth(creds, "aoss", region).add_auth(req)
-
-    # Prepare request (botocore canonicalizes headers here)
     p = req.prepare()
 
-    # DO NOT sign or send a stale Content-Length; let urllib compute it.
+    # Do not send a stale/signed Content-Length
     send_headers = dict(p.headers)
     send_headers.pop("Content-Length", None)
     send_headers.pop("content-length", None)
 
-    # Debug: log SignedHeaders and x-amz-content-sha256 actually used
+    # Debug: show SignedHeaders and payload hash actually used
     auth_hdr = send_headers.get("Authorization", "")
     sh = ""
     if "SignedHeaders=" in auth_hdr:
@@ -88,12 +91,7 @@ def _verify_index_exists():
 def _index_dummy_doc():
     region = _region_from_endpoint(AOSS_ENDPOINT)
     url    = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_doc"
-    body   = {
-        "text":   "hello from lambda",
-        "vector": [0.0] * EMBED_DIM,
-        "source": "self-test",
-        "page":   1
-    }
+    body   = {"text": "hello from lambda", "vector": [0.0]*EMBED_DIM, "source": "self-test", "page": 1}
     resp = _signed_request("POST", url, json.dumps(body).encode("utf-8"), region)
     print("[ingest] indexed dummy doc, status:", getattr(resp, "status", "ok"))
 
@@ -115,18 +113,16 @@ def ensure_index():
             print("[ingest] HEAD failed (non-404); skipping index creation this invoke")
             return
 
-    # 2) Try explicit create (PUT /{index})
+    # 2) Create index (Lucene KNN)
     try:
         body = {
-            "settings": {
-                "index.knn": True
-            },
+            "settings": { "index.knn": True },
             "mappings": {
                 "properties": {
-                    "text":   {"type": "text"},
-                    "vector": {"type": "knn_vector", "dimension": EMBED_DIM},
-                    "source": {"type": "keyword"},
-                    "page":   {"type": "integer"}
+                    "text":   { "type": "text" },
+                    "vector": { "type": "knn_vector", "dimension": EMBED_DIM },
+                    "source": { "type": "keyword" },
+                    "page":   { "type": "integer" }
                 }
             }
         }
@@ -135,7 +131,6 @@ def ensure_index():
         _verify_index_exists()
         return
     except urllib.error.HTTPError as e_put:
-        # 403 here is common when collection-level API permission is missing
         if getattr(e_put, "code", None) == 403:
             print("[ingest] PUT create denied (403). Trying implicit create via first document...")
             try:
@@ -144,16 +139,60 @@ def ensure_index():
                 return
             except urllib.error.HTTPError as e_post:
                 print("[ingest] implicit create failed:", getattr(e_post, "code", "?"), getattr(e_post, "reason", "?"))
-                # give up this invoke so we see the error
                 raise
         else:
             raise
 
+# ---- New: index real text and handle S3 events ----
+def _index_text(text: str, source_key: str):
+    if SKIP_AOSS or not AOSS_ENDPOINT:
+        print("[ingest] SKIP_AOSS active; not indexing text")
+        return
+    region = _region_from_endpoint(AOSS_ENDPOINT)
+    url    = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_doc"
+    body   = {
+        "text":   (text or "")[:2000],   # keep small for now
+        "vector": [0.0] * EMBED_DIM,     # placeholder until embedding is wired
+        "source": source_key,
+        "page":   1
+    }
+    _signed_request("POST", url, json.dumps(body).encode("utf-8"), region)
+    print(f"[ingest] indexed doc from s3://{source_key} (len={len(text or '')})")
+
+def _handle_s3_event(event):
+    recs = event.get("Records", [])
+    for r in recs:
+        if r.get("eventSource") != "aws:s3":
+            continue
+        bucket = r["s3"]["bucket"]["name"]
+        key    = unquote_plus(r["s3"]["object"]["key"])
+        print(f"[ingest] S3 event for s3://{bucket}/{key}")
+
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=key)
+            body_bytes = obj["Body"].read()
+            # naive decode for text files; extend later for PDFs/Docx, etc.
+            try:
+                text = body_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                text = ""  # fallback to empty string if decode fails
+        except ClientError as e:
+            print(f"[ingest] S3 get_object failed: {e}")
+            continue
+
+        _index_text(text, f"{bucket}/{key}")
+
+# ---- Lambda entrypoint ----
 def handler(event, _ctx):
     global _index_checked
     if not _index_checked:
         ensure_index()
         _index_checked = True
+
+    if "Records" in event:          # real S3 trigger
+        _handle_s3_event(event)
+    elif event.get("self_test"):    # console test event to index a dummy doc
+        _index_dummy_doc()
 
     print("[ingest] event (truncated):", str(event)[:800])
     return {"ok": True}
