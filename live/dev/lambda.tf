@@ -16,13 +16,13 @@ resource "aws_iam_role" "ingest_exec" {
   })
 }
 
-# NEW (stable)
+# Logs
 resource "aws_iam_role_policy_attachment" "ingest_logs" {
   role       = aws_iam_role.ingest_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Minimal inline policy: S3 read + AOSS API (dev-friendly; tighten later)
+# Minimal inline policy: S3 read + AOSS API (SQS perms attached in sqs.tf)
 resource "aws_iam_role_policy" "ingest_runtime" {
   name = "${local.name}-ingest-runtime"
   role = aws_iam_role.ingest_exec.id
@@ -34,7 +34,6 @@ resource "aws_iam_role_policy" "ingest_runtime" {
         Effect   = "Allow",
         Action   = ["s3:GetObject", "s3:ListBucket"],
         Resource = [
-          # IMPORTANT: ListBucket requires the BUCKET ARN (no /*)
           "${aws_s3_bucket.rag-documents_bucket.arn}",
           "${aws_s3_bucket.rag-documents_bucket.arn}/*"
         ]
@@ -48,10 +47,10 @@ resource "aws_iam_role_policy" "ingest_runtime" {
   })
 }
 
-# ---- Package the lambda from a folder (like before) ----
+# ---- Package the lambda from source folder ----
 data "archive_file" "ingest_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/lambda/ingest"  # <- must contain app.py
+  source_dir  = "${path.module}/lambda/ingest"
   output_path = "${path.module}/zips/ingest.zip"
 }
 
@@ -73,51 +72,22 @@ resource "aws_lambda_function" "ingest" {
       INDEX_NAME          = "chunks"
       EMBED_DIM           = "1024"
       SKIP_AOSS           = "0"
-      # we’ll add BEDROCK_REGION/EMBED_MODEL_ID later when we embed
     }
   }
 
-  # Ensure the collection exists before first publish
-  depends_on = [
-    aws_opensearchserverless_collection.kb
-  ]
-}
-
-# ---- Direct S3 -> Lambda trigger (like your previous) ----
-resource "aws_lambda_permission" "allow_s3_invoke" {
-  statement_id  = "AllowS3InvokeDocs"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ingest.function_name
-  principal     = "s3.amazonaws.com"
-  source_arn    = aws_s3_bucket.rag-documents_bucket.arn
-}
-
-resource "aws_s3_bucket_notification" "docs_trigger_ingest" {
-  bucket = aws_s3_bucket.rag-documents_bucket.id
-
-  lambda_function {
-    lambda_function_arn = aws_lambda_function.ingest.arn
-    events              = ["s3:ObjectCreated:*"]
-    # optional filters:
-    # filter_prefix = "incoming/"
-    # filter_suffix = ".txt"
-  }
-
-  depends_on = [aws_lambda_permission.allow_s3_invoke]
+  depends_on = [aws_opensearchserverless_collection.kb]
 }
 
 ############################################
-# Query Lambda (packages from lambda/query)
+# Query Lambda (unchanged)
 ############################################
 
-# Zip the query lambda source folder (must contain app.py)
 data "archive_file" "query_zip" {
   type        = "zip"
   source_dir  = "${path.module}/lambda/query"
   output_path = "${path.module}/zips/query.zip"
 }
 
-# Execution role
 resource "aws_iam_role" "query_exec" {
   name = "${local.name}-query-exec"
 
@@ -131,13 +101,11 @@ resource "aws_iam_role" "query_exec" {
   })
 }
 
-# Basic logging
 resource "aws_iam_role_policy_attachment" "query_logs" {
   role       = aws_iam_role.query_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Runtime permissions (dev-friendly; tighten later)
 resource "aws_iam_role_policy" "query_runtime" {
   name = "${local.name}-query-runtime"
   role = aws_iam_role.query_exec.id
@@ -159,7 +127,6 @@ resource "aws_iam_role_policy" "query_runtime" {
   })
 }
 
-# Lambda function (uses environment vars to talk to AOSS + Bedrock)
 resource "aws_lambda_function" "query" {
   function_name    = "${local.name}-query"
   role             = aws_iam_role.query_exec.arn
@@ -174,26 +141,18 @@ resource "aws_lambda_function" "query" {
 
   environment {
     variables = {
-      # AOSS
       OPENSEARCH_ENDPOINT = aws_opensearchserverless_collection.kb.collection_endpoint
       INDEX_NAME          = "chunks"
-
-      # Bedrock (adjust if you use different region/models)
       BEDROCK_REGION      = "us-west-2"
       EMBED_MODEL_ID      = "amazon.titan-embed-text-v2:0"
       CHAT_MODEL_ID       = "anthropic.claude-3-sonnet-20240229-v1:0"
-
-      # Embedding dimension for index consistency
       EMBED_DIM           = "1024"
     }
   }
 
-  depends_on = [
-    aws_opensearchserverless_collection.kb
-  ]
+  depends_on = [aws_opensearchserverless_collection.kb]
 }
 
-# Helpful outputs
 output "query_lambda_name" {
   value       = aws_lambda_function.query.function_name
   description = "Name of the query lambda"
