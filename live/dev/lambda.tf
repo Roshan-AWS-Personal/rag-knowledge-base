@@ -12,11 +12,6 @@ resource "aws_iam_role" "ingest_exec" {
       Effect = "Allow",
       Action = "sts:AssumeRole",
       Principal = { Service = "lambda.amazonaws.com" }
-    },
-    {
-    Effect   = "Allow",
-    Action   = ["bedrock:InvokeModel"],
-    Resource = "*"
     }
     ]
   })
@@ -47,6 +42,11 @@ resource "aws_iam_role_policy" "ingest_runtime" {
       {
         Effect   = "Allow",
         Action   = ["aoss:APIAccessAll"],
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
         Resource = "*"
       }
     ]
