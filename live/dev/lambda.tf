@@ -12,7 +12,13 @@ resource "aws_iam_role" "ingest_exec" {
       Effect = "Allow",
       Action = "sts:AssumeRole",
       Principal = { Service = "lambda.amazonaws.com" }
-    }]
+    },
+    {
+    Effect   = "Allow",
+    Action   = ["bedrock:InvokeModel"],
+    Resource = "*"
+    }
+    ]
   })
 }
 
@@ -71,7 +77,10 @@ resource "aws_lambda_function" "ingest" {
       OPENSEARCH_ENDPOINT = aws_opensearchserverless_collection.kb.collection_endpoint
       INDEX_NAME          = "chunks"
       EMBED_DIM           = "1024"
-      SKIP_AOSS           = "0"
+      SKIP_AOSS           = "0" 
+      BEDROCK_REGION      = "us-west-2"
+      EMBED_MODEL_ID      = "amazon.titan-embed-text-v2:0"
+      PREVIEW_KNN         = "1"   # set "0" to disable the quick preview logs
     }
   }
 
