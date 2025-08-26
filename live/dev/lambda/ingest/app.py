@@ -17,7 +17,7 @@ EMBED_DIM      = int(os.environ.get("EMBED_DIM", "1024"))
 SKIP_AOSS      = os.environ.get("SKIP_AOSS", "0") == "1"
 
 # Bedrock (embedding)
-BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-west-2")
+BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-southeast-2")
 EMBED_MODEL_ID = os.environ.get("EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0")
 PREVIEW_KNN    = os.environ.get("PREVIEW_KNN", "1") == "1"
 

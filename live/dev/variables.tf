@@ -63,7 +63,7 @@ variable "lambda_memory_mb"  {
 # Env for both Lambdas
 variable "bedrock_region"    {
    type = string
-   default = "us-west-2"
+   default = "ap-southeast-2"
 }
 variable "embed_model_id"    {
    type = string

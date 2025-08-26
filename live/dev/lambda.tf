@@ -152,7 +152,7 @@ resource "aws_lambda_function" "query" {
     variables = {
       OPENSEARCH_ENDPOINT = aws_opensearchserverless_collection.kb.collection_endpoint
       INDEX_NAME          = "chunks"
-      BEDROCK_REGION      = "us-west-2"
+      BEDROCK_REGION      = "ap-southeast-2"
       EMBED_MODEL_ID      = "amazon.titan-embed-text-v2:0"
       CHAT_MODEL_ID       = "anthropic.claude-3-sonnet-20240229-v1:0"
       EMBED_DIM           = "1024"
