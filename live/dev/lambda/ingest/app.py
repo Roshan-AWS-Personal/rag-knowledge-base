@@ -46,6 +46,7 @@ def _signed_request(method: str, url: str, body, region: str):
     base_headers = {
         "host": host,
         "content-type": "application/json",
+        "accept": "application/json",  # <—
         "x-amz-content-sha256": payload_hash,
     }
 
@@ -169,27 +170,33 @@ def _knn_preview(query_text: str, k=3):
     qvec   = _embed_text((query_text or "")[:1000])
     region = _region_from_endpoint(AOSS_ENDPOINT)
     url    = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_search"
-    body   = {
+
+    # NOTE: "vector" must match your mapping field name (see mapping below).
+    body = {
         "size": k,
-        "_source": ["source","page","text"],
-        "knn": {
-            "field": "vector",
-            "query_vector": qvec,
-            "k": k,
-            "num_candidates": 100
+        "_source": ["source", "page", "text"],
+        "query": {
+            "knn": {
+                "vector": {          # <-- if your field is "embedding", rename this key to "embedding"
+                    "vector": qvec,
+                    "k": k
+                }
+            }
         }
     }
+
     resp = _signed_request("POST", url, json.dumps(body).encode("utf-8"), region)
-    data = json.loads(resp.read().decode("utf-8","ignore"))
-    hits = data.get("hits",{}).get("hits",[])
+    data = json.loads(resp.read().decode("utf-8", "ignore"))
+    hits = data.get("hits", {}).get("hits", [])
     pretty = [
         {
             "score": round(h.get("_score", 0.0), 4),
-            "source": (h.get("_source",{}).get("source",""))[:120],
-            "snippet": (h.get("_source",{}).get("text","")[:120]).replace("\n"," ")
+            "source": (h.get("_source", {}).get("source", ""))[:120],
+            "snippet": (h.get("_source", {}).get("text", "")[:120]).replace("\n", " ")
         } for h in hits
     ]
     print("[knn] preview:", json.dumps(pretty))
+
 
 # ---------- Index create ----------
 def _index_dummy_doc():
@@ -219,10 +226,15 @@ def ensure_index():
 
     try:
         body = {
-            "settings": {"index.knn": True},
+            "settings": {"index": {"knn": True}},  # <— updated
             "mappings": {"properties": {
                 "text":   {"type": "text"},
-                "vector": {"type": "knn_vector", "dimension": EMBED_DIM},
+                "vector": {
+                    "type": "knn_vector",
+                    "dimension": EMBED_DIM,
+                    # optional but recommended:
+                    # "method": {"name": "hnsw", "engine": "faiss", "space_type": "l2"}
+                },
                 "source": {"type": "keyword"},
                 "page":   {"type": "integer"}
             }}
