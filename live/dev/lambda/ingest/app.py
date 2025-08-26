@@ -88,6 +88,16 @@ def _verify_index_exists():
     print(f"[ingest] endpoint={AOSS_ENDPOINT} derived_region={_region_from_endpoint(AOSS_ENDPOINT)}")
     print("[ingest] GET index ok, status:", getattr(resp, "status", "ok"))
 
+def _log_index_count():
+    try:
+        region = _region_from_endpoint(AOSS_ENDPOINT)
+        url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_count"
+        resp = _signed_request("GET", url, None, region)
+        print("[ingest] _count:", resp.read().decode("utf-8", "ignore"))
+    except Exception as e:
+        print("[ingest] _count failed:", e)
+
+
 def _index_dummy_doc():
     region = _region_from_endpoint(AOSS_ENDPOINT)
     url    = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_doc"
@@ -181,6 +191,7 @@ def _handle_s3_event(event):
             continue
 
         _index_text(text, f"{bucket}/{key}")
+        _log_index_count()
 
 # ---- Lambda entrypoint ----
 def handler(event, _ctx):
