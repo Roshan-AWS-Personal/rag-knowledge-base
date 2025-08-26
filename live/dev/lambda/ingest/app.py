@@ -97,13 +97,13 @@ def _log_index_count():
     except Exception as e:
         print("[ingest] _count failed:", e)
 
-
 def _index_dummy_doc():
     region = _region_from_endpoint(AOSS_ENDPOINT)
     url    = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_doc"
     body   = {"text": "hello from lambda", "vector": [0.0]*EMBED_DIM, "source": "self-test", "page": 1}
-    resp = _signed_request("POST", url, json.dumps(body).encode("utf-8"), region)
-    print("[ingest] indexed dummy doc, status:", getattr(resp, "status", "ok"))
+    _signed_request("POST", url, json.dumps(body).encode("utf-8"), region)
+    print("[ingest] indexed dummy doc")
+    _log_index_count()
 
 def ensure_index():
     if SKIP_AOSS or not AOSS_ENDPOINT:
@@ -153,7 +153,7 @@ def ensure_index():
         else:
             raise
 
-# ---- New: index real text and handle S3 events ----
+# ---- Index text ----
 def _index_text(text: str, source_key: str):
     if SKIP_AOSS or not AOSS_ENDPOINT:
         print("[ingest] SKIP_AOSS active; not indexing text")
@@ -168,12 +168,34 @@ def _index_text(text: str, source_key: str):
     }
     _signed_request("POST", url, json.dumps(body).encode("utf-8"), region)
     print(f"[ingest] indexed doc from s3://{source_key} (len={len(text or '')})")
+    _log_index_count()
 
-def _handle_s3_event(event):
-    recs = event.get("Records", [])
-    for r in recs:
-        if r.get("eventSource") != "aws:s3":
-            continue
+# ---- NEW: unwrap SQS or use direct S3 events ----
+def _extract_s3_records(event):
+    """Return a flat list of S3 event records, unwrapping SQS if needed."""
+    out = []
+    for r in event.get("Records", []):
+        src = r.get("eventSource") or r.get("EventSource")
+        if src == "aws:s3" and "s3" in r:
+            out.append(r)
+        elif src == "aws:sqs" and "body" in r:
+            try:
+                inner = json.loads(r["body"])
+                for ir in inner.get("Records", []):
+                    if ir.get("eventSource") == "aws:s3" and "s3" in ir:
+                        out.append(ir)
+            except Exception as e:
+                print(f"[ingest] could not parse SQS body as S3 event: {e}")
+                continue
+    return out
+
+def _handle_event(event):
+    s3_records = _extract_s3_records(event)
+    if not s3_records:
+        print("[ingest] no S3 records found in event")
+        return
+
+    for r in s3_records:
         bucket = r["s3"]["bucket"]["name"]
         key    = unquote_plus(r["s3"]["object"]["key"])
         print(f"[ingest] S3 event for s3://{bucket}/{key}")
@@ -185,13 +207,12 @@ def _handle_s3_event(event):
             try:
                 text = body_bytes.decode("utf-8", errors="replace")
             except Exception:
-                text = ""  # fallback to empty string if decode fails
+                text = ""
         except ClientError as e:
             print(f"[ingest] S3 get_object failed: {e}")
             continue
 
         _index_text(text, f"{bucket}/{key}")
-        _log_index_count()
 
 # ---- Lambda entrypoint ----
 def handler(event, _ctx):
@@ -200,10 +221,12 @@ def handler(event, _ctx):
         ensure_index()
         _index_checked = True
 
-    if "Records" in event:          # real S3 trigger
-        _handle_s3_event(event)
+    if "Records" in event:          # S3 direct, or S3 wrapped in SQS
+        _handle_event(event)
     elif event.get("self_test"):    # console test event to index a dummy doc
         _index_dummy_doc()
+    elif event.get("count_only"):   # optional console test
+        _log_index_count()
 
     print("[ingest] event (truncated):", str(event)[:800])
     return {"ok": True}
