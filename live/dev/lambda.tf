@@ -78,7 +78,7 @@ resource "aws_lambda_function" "ingest" {
       INDEX_NAME          = "chunks"
       EMBED_DIM           = "1024"
       SKIP_AOSS           = "0" 
-      BEDROCK_REGION      = "us-west-2"
+      BEDROCK_REGION      = "ap-southeast-2"
       EMBED_MODEL_ID      = "amazon.titan-embed-text-v2:0"
       PREVIEW_KNN         = "1"   # set "0" to disable the quick preview logs
     }
