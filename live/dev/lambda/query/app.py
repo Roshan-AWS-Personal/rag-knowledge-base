@@ -40,17 +40,18 @@ def _signed_request(method: str, url: str, body: bytes, region: str):
     return urllib.request.urlopen(urllib.request.Request(p.url, data=body, method=p.method, headers=h))
 
 def _embed(text: str):
-    body = {"inputText": (text or "")[:4000], "embeddingConfig": {"outputEmbeddingLength": EMBED_DIM}}
+    body = {"inputText": (text or "")[:4000]}  # Titan v2 expects just inputText
     r = bedrock.invoke_model(
-        modelId=EMBED_MODEL_ID,
+        modelId=EMBED_MODEL_ID,  # "amazon.titan-embed-text-v2:0"
         body=json.dumps(body).encode("utf-8"),
         contentType="application/json",
         accept="application/json",
     )
     out = json.loads(r["body"].read().decode("utf-8","ignore"))
     vec = out.get("embedding") or out.get("vector") or []
+    # normalize to EMBED_DIM (pad/trim) so it matches your index mapping
     if len(vec) > EMBED_DIM: vec = vec[:EMBED_DIM]
-    if len(vec) < EMBED_DIM: vec = vec + [0.0]*(EMBED_DIM-len(vec))
+    if len(vec) < EMBED_DIM: vec = vec + [0.0]*(EMBED_DIM - len(vec))
     return vec
 
 def _knn(vec, k=5):
