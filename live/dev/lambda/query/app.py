@@ -1,12 +1,10 @@
 # lambda/query/app.py
-import os, json, urllib.request, urllib.error, hashlib
+import os, json, urllib.request, urllib.error, hashlib, traceback
 from urllib.parse import urlparse
-from wsgiref import headers
 from botocore.session import Session
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
 
-# ---- Env ----
 AOSS_ENDPOINT  = os.environ["OPENSEARCH_ENDPOINT"]
 INDEX_NAME     = os.environ.get("INDEX_NAME", "chunks")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-southeast-2")
@@ -28,8 +26,9 @@ def _signed_request(method: str, url: str, body: bytes, region: str):
     if isinstance(body, str): body = body.encode("utf-8")
     payload_hash = hashlib.sha256(body).hexdigest()
     creds = _sess.get_credentials().get_frozen_credentials()
-    headers = {   
-        "host": urlparse(url).netloc,
+    host = urlparse(url).netloc
+    headers = {
+        "host": host,
         "content-type": "application/json",
         "accept": "application/json",
         "x-amz-content-sha256": payload_hash,
@@ -37,7 +36,6 @@ def _signed_request(method: str, url: str, body: bytes, region: str):
     req = AWSRequest(method=method, url=url, data=body, headers=headers)
     SigV4Auth(creds, "aoss", region).add_auth(req)
     p = req.prepare()
-    # urllib
     h = dict(p.headers); h.pop("Content-Length", None); h.pop("content-length", None)
     return urllib.request.urlopen(urllib.request.Request(p.url, data=body, method=p.method, headers=h))
 
@@ -86,34 +84,58 @@ def _cors():
       "Access-Control-Allow-Headers": "Content-Type"
     }
 
+def _err(status, msg, where=None, exc=None):
+    if exc:
+        print(f"[error] {where}: {exc}\n{traceback.format_exc()}")
+    body = {"error": msg}
+    if where: body["where"] = where
+    return {"statusCode": status, "headers": _cors(), "body": json.dumps(body)}
+
 def handler(event, _ctx):
     # CORS preflight
     if event.get("requestContext",{}).get("http",{}).get("method") == "OPTIONS":
         return {"statusCode": 200, "headers": _cors(), "body": ""}
 
-    body = {}
-    if "body" in event and isinstance(event["body"], str):
-        try: body = json.loads(event["body"])
-        except: body = {}
-    elif isinstance(event, dict):
-        body = event
+    # Parse body
+    try:
+        if isinstance(event.get("body"), str):
+            body = json.loads(event["body"])
+        elif isinstance(event, dict):
+            body = event
+        else:
+            body = {}
+    except Exception as e:
+        return _err(400, "invalid JSON", "parse", e)
 
     q = (body.get("q") or body.get("question") or "").strip()
     if not q:
-        return {"statusCode": 400, "headers": _cors(), "body": json.dumps({"error":"missing q"})}
+        return _err(400, "missing q")
 
-    qvec = _embed(q)
-    hits = _knn(qvec, k=5)
+    # 1) embed
+    try:
+        qvec = _embed(q)
+    except Exception as e:
+        return _err(502, "embed failed (Titan)", "embed", e)
 
-    msgs = _build_messages(q, hits)
-    r = bedrock.invoke_model(
-        modelId=CHAT_MODEL_ID,
-        body=json.dumps({"anthropic_version":"bedrock-2023-05-31","max_tokens":700,"messages":msgs}).encode("utf-8"),
-        contentType="application/json",
-        accept="application/json",
-    )
-    out = json.loads(r["body"].read().decode("utf-8","ignore"))
-    answer = (out.get("content") or [{}])[0].get("text","")
+    # 2) search
+    try:
+        hits = _knn(qvec, k=5)
+    except Exception as e:
+        return _err(502, "search failed (AOSS)", "search", e)
+
+    # 3) compose + chat
+    try:
+        msgs = _build_messages(q, hits)
+        r = bedrock.invoke_model(
+            modelId=CHAT_MODEL_ID,
+            body=json.dumps({"anthropic_version":"bedrock-2023-05-31","max_tokens":700,"messages":msgs}).encode("utf-8"),
+            contentType="application/json",
+            accept="application/json",
+        )
+        out = json.loads(r["body"].read().decode("utf-8","ignore"))
+        answer = (out.get("content") or [{}])[0].get("text","")
+    except Exception as e:
+        return _err(502, "chat failed (Claude)", "chat", e)
 
     citations = [
       {"source": h.get("_source",{}).get("source"), "page": h.get("_source",{}).get("page"), "score": h.get("_score")}
