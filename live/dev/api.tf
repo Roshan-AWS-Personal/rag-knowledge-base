@@ -29,9 +29,9 @@ resource "aws_lambda_permission" "kb" {
   source_arn    = "${aws_apigatewayv2_api.kb.execution_arn}/*/*"
 }
 
-resource "aws_apigatewayv2_stage" "$default" {
+resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.kb.id
-  name        = "$default"
+  name        = "default"
   auto_deploy = true
 }
 
