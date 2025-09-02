@@ -91,7 +91,7 @@ resource "aws_s3_bucket_policy" "site" {
 resource "aws_s3_object" "index_html" {
   bucket        = aws_s3_bucket.site.id
   key           = "index.html"
-  content       = data.template_file.index_html.rendered
+  content       = file("${path.module}/frontend/index.html")
   content_type  = "text/html"
   cache_control = "no-store, must-revalidate"
 }
