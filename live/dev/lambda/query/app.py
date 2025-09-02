@@ -12,6 +12,7 @@ EMBED_MODEL_ID = os.environ.get("EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0"
 CHAT_MODEL_ID  = os.environ.get("CHAT_MODEL_ID",  "anthropic.claude-3-sonnet-20240229-v1:0")
 EMBED_DIM      = int(os.environ.get("EMBED_DIM", "1024"))
 VEC_FIELD      = os.environ.get("VEC_FIELD", "vector")
+MAX_CTX_SNIPPET = int(os.environ.get("MAX_CTX_SNIPPET", "120"))
 
 _sess = Session()
 bedrock = _sess.create_client("bedrock-runtime", region_name=BEDROCK_REGION)
@@ -42,19 +43,18 @@ def _signed_request(method: str, url: str, body: bytes, region: str):
 def _embed(text: str):
     body = {"inputText": (text or "")[:4000]}  # Titan v2 expects just inputText
     r = bedrock.invoke_model(
-        modelId=EMBED_MODEL_ID,  # "amazon.titan-embed-text-v2:0"
+        modelId=EMBED_MODEL_ID,
         body=json.dumps(body).encode("utf-8"),
         contentType="application/json",
         accept="application/json",
     )
     out = json.loads(r["body"].read().decode("utf-8","ignore"))
     vec = out.get("embedding") or out.get("vector") or []
-    # normalize to EMBED_DIM (pad/trim) so it matches your index mapping
     if len(vec) > EMBED_DIM: vec = vec[:EMBED_DIM]
     if len(vec) < EMBED_DIM: vec = vec + [0.0]*(EMBED_DIM - len(vec))
     return vec
 
-def _knn(vec, k=5):
+def _knn(vec, k=10):  # ask for more; we'll de-dupe down to 3 later
     url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_search"
     body = {
         "size": k,
@@ -65,18 +65,35 @@ def _knn(vec, k=5):
     data = json.loads(resp.read().decode("utf-8","ignore"))
     return data.get("hits",{}).get("hits",[])
 
+def _dedupe_hits(hits, want=3):
+    out, seen = [], set()
+    for h in hits:
+        s = h.get("_source", {}) or {}
+        if s.get("source") == "self-test":
+            continue
+        key = (s.get("source"), s.get("page"), (s.get("text","")[:160]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+        if len(out) >= want:
+            break
+    return out
+
 def _build_messages(question: str, hits):
-    context = []
+    context_chunks = []
     for i,h in enumerate(hits, start=1):
-        s = h.get("_source", {})
-        context.append(f"[{i}] SOURCE={s.get('source','')} page={s.get('page')}\n{s.get('text','')}")
-    ctx = "\n\n".join(context)
-    txt = (
+        s = h.get("_source", {}) or {}
+        context_chunks.append(
+            f"[{i}] SOURCE={s.get('source','')} page={s.get('page')}\n{s.get('text','')}"
+        )
+    ctx = "\n\n".join(context_chunks)
+    prompt = (
       "You are a careful assistant. Answer ONLY from the sources below. "
       "If unsure, say you don't know. Cite sources like [1], [2].\n\n"
       f"QUESTION:\n{question}\n\nSOURCES:\n{ctx}"
     )
-    return [{"role":"user","content":[{"type":"text","text":txt}]}]
+    return [{"role":"user","content":[{"type":"text","text":prompt}]}]
 
 def _cors():
     return {
@@ -120,9 +137,15 @@ def handler(event, _ctx):
 
     # 2) search
     try:
-        hits = _knn(qvec, k=5)
+        raw_hits = _knn(qvec, k=10)
+        hits = _dedupe_hits(raw_hits, want=3)
     except Exception as e:
         return _err(502, "search failed (AOSS)", "search", e)
+
+    # Optional guardrail: if nothing strong found, answer clearly
+    if not hits:
+        return {"statusCode": 200, "headers": _cors(),
+                "body": json.dumps({"answer": "I couldn’t find anything relevant in the knowledge base.", "citations": []})}
 
     # 3) compose + chat
     try:
@@ -138,8 +161,12 @@ def handler(event, _ctx):
     except Exception as e:
         return _err(502, "chat failed (Claude)", "chat", e)
 
+    def snip(t: str) -> str:
+        return (t or "").replace("\n"," ")[:MAX_CTX_SNIPPET]
+
     citations = [
-      {"source": h.get("_source",{}).get("source"), "page": h.get("_source",{}).get("page"), "score": h.get("_score")}
+      {"source": s.get("source"), "page": s.get("page"), "score": h.get("_score"), "snippet": snip(str(s.get("text")))}
       for h in hits
+      for s in [h.get("_source", {}) or {}]
     ]
     return {"statusCode": 200, "headers": _cors(), "body": json.dumps({"answer": answer, "citations": citations})}

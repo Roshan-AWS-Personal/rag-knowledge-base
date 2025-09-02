@@ -92,3 +92,25 @@ variable "s3_suffix" {
   type    = string
   default = ".txt"
 }
+
+############################
+# Vars (adjust as needed)
+############################
+variable "name"  { 
+  default = "ai-kb-dev" 
+}
+variable "api_id"    { 
+  description = "API Gateway v2 ID for the query API" 
+}
+variable "api_stage" { 
+  description = "API stage name"
+  default     = "$default" 
+}
+variable "domain_name" { 
+  description = "Optional custom domain for CF" 
+  default     = "" 
+}
+variable "acm_cert_arn" { 
+  description = "us-east-1 cert ARN if using custom domain"
+  default     = "" 
+}
