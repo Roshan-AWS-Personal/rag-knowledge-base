@@ -1,9 +1,10 @@
 # lambda/query/app.py
-import os, json, urllib.request, urllib.error, hashlib, traceback
+import os, json, urllib.request, urllib.error, hashlib, traceback, time
 from urllib.parse import urlparse
 from botocore.session import Session
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
+from botocore.exceptions import ClientError
 
 AOSS_ENDPOINT  = os.environ["OPENSEARCH_ENDPOINT"]
 INDEX_NAME     = os.environ.get("INDEX_NAME", "chunks")
@@ -41,20 +42,31 @@ def _signed_request(method: str, url: str, body: bytes, region: str):
     return urllib.request.urlopen(urllib.request.Request(p.url, data=body, method=p.method, headers=h))
 
 def _embed(text: str):
-    body = {"inputText": (text or "")[:4000]}  # Titan v2 expects just inputText
-    r = bedrock.invoke_model(
-        modelId=EMBED_MODEL_ID,
-        body=json.dumps(body).encode("utf-8"),
-        contentType="application/json",
-        accept="application/json",
-    )
-    out = json.loads(r["body"].read().decode("utf-8","ignore"))
-    vec = out.get("embedding") or out.get("vector") or []
-    if len(vec) > EMBED_DIM: vec = vec[:EMBED_DIM]
-    if len(vec) < EMBED_DIM: vec = vec + [0.0]*(EMBED_DIM - len(vec))
-    return vec
+    body = {"inputText": (text or "")[:4000]}
+    last = None
+    for i in range(4):  # retries
+        try:
+            r = bedrock.invoke_model(
+                modelId=EMBED_MODEL_ID,
+                body=json.dumps(body).encode("utf-8"),
+                contentType="application/json",
+                accept="application/json",
+            )
+            out = json.loads(r["body"].read().decode("utf-8","ignore"))
+            vec = out.get("embedding") or out.get("vector") or []
+            if len(vec) > EMBED_DIM: vec = vec[:EMBED_DIM]
+            if len(vec) < EMBED_DIM: vec = vec + [0.0]*(EMBED_DIM - len(vec))
+            return vec
+        except ClientError as e:
+            code = (e.response.get("Error") or {}).get("Code","")
+            if code in ("ThrottlingException","ModelTimeoutException","ServiceUnavailableException","InternalServerException"):
+                time.sleep(0.35 * (2**i))
+                last = e
+                continue
+            raise
+    raise last or RuntimeError("embed failed")
 
-def _knn(vec, k=10):  # ask for more; we'll de-dupe down to 3 later
+def _knn(vec, k=10):
     url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_search"
     body = {
         "size": k,
@@ -81,13 +93,11 @@ def _dedupe_hits(hits, want=3):
     return out
 
 def _build_messages(question: str, hits):
-    context_chunks = []
+    blocks = []
     for i,h in enumerate(hits, start=1):
         s = h.get("_source", {}) or {}
-        context_chunks.append(
-            f"[{i}] SOURCE={s.get('source','')} page={s.get('page')}\n{s.get('text','')}"
-        )
-    ctx = "\n\n".join(context_chunks)
+        blocks.append(f"[{i}] SOURCE={s.get('source','')} page={s.get('page')}\n{s.get('text','')}")
+    ctx = "\n\n".join(blocks)
     prompt = (
       "You are a careful assistant. Answer ONLY from the sources below. "
       "If unsure, say you don't know. Cite sources like [1], [2].\n\n"
@@ -103,11 +113,37 @@ def _cors():
     }
 
 def _err(status, msg, where=None, exc=None):
-    if exc:
-        print(f"[error] {where}: {exc}\n{traceback.format_exc()}")
     body = {"error": msg}
     if where: body["where"] = where
+    if exc:
+        print(f"[error] {where}: {exc}\n{traceback.format_exc()}")
+        if isinstance(exc, ClientError):
+            err = exc.response.get("Error") or {}
+            body["bedrock_code"] = err.get("Code")
+            body["bedrock_message"] = err.get("Message")
     return {"statusCode": status, "headers": _cors(), "body": json.dumps(body)}
+
+def _chat(messages):
+    payload = {"anthropic_version":"bedrock-2023-05-31","max_tokens":700,"messages":messages}
+    last = None
+    for i in range(4):  # retries
+        try:
+            r = bedrock.invoke_model(
+                modelId=CHAT_MODEL_ID,
+                body=json.dumps(payload).encode("utf-8"),
+                contentType="application/json",
+                accept="application/json",
+            )
+            out = json.loads(r["body"].read().decode("utf-8","ignore"))
+            return (out.get("content") or [{}])[0].get("text","")
+        except ClientError as e:
+            code = (e.response.get("Error") or {}).get("Code","")
+            if code in ("ThrottlingException","ModelTimeoutException","ServiceUnavailableException","InternalServerException"):
+                time.sleep(0.5 * (2**i))
+                last = e
+                continue
+            raise
+    raise last or RuntimeError("chat failed")
 
 def handler(event, _ctx):
     # CORS preflight
@@ -142,7 +178,6 @@ def handler(event, _ctx):
     except Exception as e:
         return _err(502, "search failed (AOSS)", "search", e)
 
-    # Optional guardrail: if nothing strong found, answer clearly
     if not hits:
         return {"statusCode": 200, "headers": _cors(),
                 "body": json.dumps({"answer": "I couldn’t find anything relevant in the knowledge base.", "citations": []})}
@@ -150,14 +185,7 @@ def handler(event, _ctx):
     # 3) compose + chat
     try:
         msgs = _build_messages(q, hits)
-        r = bedrock.invoke_model(
-            modelId=CHAT_MODEL_ID,
-            body=json.dumps({"anthropic_version":"bedrock-2023-05-31","max_tokens":700,"messages":msgs}).encode("utf-8"),
-            contentType="application/json",
-            accept="application/json",
-        )
-        out = json.loads(r["body"].read().decode("utf-8","ignore"))
-        answer = (out.get("content") or [{}])[0].get("text","")
+        answer = _chat(msgs)
     except Exception as e:
         return _err(502, "chat failed (Claude)", "chat", e)
 
@@ -165,7 +193,7 @@ def handler(event, _ctx):
         return (t or "").replace("\n"," ")[:MAX_CTX_SNIPPET]
 
     citations = [
-      {"source": s.get("source"), "page": s.get("page"), "score": h.get("_score"), "snippet": snip(str(s.get("text")))}
+      {"source": s.get("source"), "page": s.get("page"), "score": h.get("_score"), "snippet": snip(s.get("text"))}
       for h in hits
       for s in [h.get("_source", {}) or {}]
     ]
