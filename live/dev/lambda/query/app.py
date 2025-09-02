@@ -193,7 +193,7 @@ def handler(event, _ctx):
         return (t or "").replace("\n"," ")[:MAX_CTX_SNIPPET]
 
     citations = [
-      {"source": s.get("source"), "page": s.get("page"), "score": h.get("_score"), "snippet": snip(s.get("text"))}
+      {"source": s.get("source"), "page": s.get("page"), "score": h.get("_score"), "snippet": snip(s.get("text") or "")}
       for h in hits
       for s in [h.get("_source", {}) or {}]
     ]

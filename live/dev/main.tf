@@ -88,27 +88,16 @@ resource "aws_s3_bucket_policy" "site" {
   })
 }
 
-resource "aws_s3_object" "index" {
+data "template_file" "index_html" {
+  template = file("${path.module}/frontend/index.html.tpl")
+}
+
+resource "aws_s3_object" "index_html" {
   bucket       = aws_s3_bucket.site.id
   key          = "index.html"
+  content      = data.template_file.index_html.rendered
   content_type = "text/html"
-  content      = <<HTML
-<!doctype html><meta charset="utf-8"><title>KB Chat</title>
-<style>body{font-family:system-ui,Inter,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}.msg{padding:12px 14px;border-radius:14px;margin:10px 0;white-space:pre-wrap}.user{background:#eef}.bot{background:#f6f6f6}.row{display:flex;gap:8px;position:sticky;bottom:0;background:#fff;padding:12px 0}input,button{font-size:16px}input{flex:1;padding:10px 12px;border:1px solid #ddd;border-radius:10px}button{padding:10px 14px;border:1px solid #ddd;border-radius:10px}</style>
-<h2>Knowledge-base chat (dev)</h2>
-<div id="chat"></div>
-<div class="row"><input id="q" placeholder="Ask..." autofocus><button id="ask">Ask</button></div>
-<script>
-const chat=document.getElementById('chat'),q=document.getElementById('q'),btn=document.getElementById('ask');
-function bubble(t,c){const d=document.createElement('div');d.className='msg '+c;d.textContent=t;chat.appendChild(d);window.scrollTo(0,document.body.scrollHeight)}
-async function ask(){const text=q.value.trim();if(!text)return;bubble(text,'user');q.value='';btn.disabled=true;
-try{const r=await fetch('/query',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({q:text})});
-    const j=await r.json();bubble(j.answer||JSON.stringify(j),'bot');
-    if(j.citations?.length){bubble("Sources:\\n- "+j.citations.map(x=>x.source+" (p."+x.page+")").join("\\n- "),'bot')}
-}catch(e){bubble("Error: "+e,'bot')}finally{btn.disabled=false}}
-btn.onclick=ask;q.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey)ask()};
-</script>
-HTML
+  cache_control = "no-store, must-revalidate" # ← add this line
 }
 
 resource "aws_s3_bucket_cors_configuration" "website_cors" {
