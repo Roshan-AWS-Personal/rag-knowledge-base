@@ -99,9 +99,7 @@ variable "s3_suffix" {
 variable "name"  { 
   default = "ai-kb-dev" 
 }
-variable "api_id"    { 
-  description = "API Gateway v2 ID for the query API" 
-}
+
 variable "api_stage" { 
   description = "API stage name"
   default     = "$default" 
