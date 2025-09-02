@@ -1,7 +1,7 @@
 locals {
   s3_origin_id  = "${var.name}-site-s3"
   api_origin_id = "${var.name}-query-api"
-  api_domain    = "${var.api_id}.execute-api.ap-southeast-2.amazonaws.com"
+  api_domain    = "${aws_apigatewayv2_api.kb.id}.execute-api.ap-southeast-2.amazonaws.com"
   use_custom_domain = var.domain_name != "" && var.acm_cert_arn != ""
 }
 
