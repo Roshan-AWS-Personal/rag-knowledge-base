@@ -87,14 +87,11 @@ resource "aws_s3_bucket_policy" "site" {
     }]
   })
 }
-data "template_file" "index_html" {
-  template = file("${path.module}/frontend/index.html.tpl")
-}
 
 resource "aws_s3_object" "index_html" {
   bucket        = aws_s3_bucket.site.id
   key           = "index.html"
-  content       = data.template_file.index_html.rendered
+  content       = file("${path.module}/frontend/index.html")  # <-- raw file
   content_type  = "text/html"
   cache_control = "no-store, must-revalidate"
 }
