@@ -111,5 +111,17 @@ btn.onclick=ask;q.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey)ask()};
 HTML
 }
 
+resource "aws_s3_bucket_cors_configuration" "website_cors" {
+  bucket = aws_s3_bucket.site.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["PUT", "GET"]
+    allowed_origins = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
 output "cloudfront_url" { value = "https://${aws_cloudfront_distribution.this.domain_name}" }
 output "site_bucket"    { value = aws_s3_bucket.site.bucket }
