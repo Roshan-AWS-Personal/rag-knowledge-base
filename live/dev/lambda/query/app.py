@@ -1,23 +1,34 @@
 # lambda/query/app.py
-import os, json, urllib.request, urllib.error, hashlib, traceback, time
+import os, json, urllib.request, urllib.error, hashlib, traceback, time, random
 from urllib.parse import urlparse
 from botocore.session import Session
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
 from botocore.exceptions import ClientError
 
-AOSS_ENDPOINT  = os.environ["OPENSEARCH_ENDPOINT"]
-INDEX_NAME     = os.environ.get("INDEX_NAME", "chunks")
-BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-southeast-2")
-EMBED_MODEL_ID = os.environ.get("EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0")
-CHAT_MODEL_ID  = os.environ.get("CHAT_MODEL_ID",  "anthropic.claude-3-sonnet-20240229-v1:0")
-EMBED_DIM      = int(os.environ.get("EMBED_DIM", "1024"))
-VEC_FIELD      = os.environ.get("VEC_FIELD", "vector")
-MAX_CTX_SNIPPET = int(os.environ.get("MAX_CTX_SNIPPET", "120"))
+# ---------- Config (env) ----------
+AOSS_ENDPOINT   = os.environ["OPENSEARCH_ENDPOINT"]
+INDEX_NAME      = os.environ.get("INDEX_NAME", "chunks")
 
-_sess = Session()
+BEDROCK_REGION  = os.environ.get("BEDROCK_REGION", "ap-southeast-2")
+EMBED_MODEL_ID  = os.environ.get("EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0")
+
+# Primary chat model (Sonnet by default) + cheap fallback (Haiku)
+CHAT_MODEL_ID    = os.environ.get("CHAT_MODEL_ID",     "anthropic.claude-3-sonnet-20240229-v1:0")
+CHAT_FALLBACK_ID = os.environ.get("CHAT_FALLBACK_ID",  "anthropic.claude-3-haiku-20240307-v1:0")
+
+# Pacing (per warm container) to avoid hitting low TPS/chat bursts
+CHAT_MIN_GAP_MS  = int(os.environ.get("CHAT_MIN_GAP_MS", "1400"))
+
+EMBED_DIM        = int(os.environ.get("EMBED_DIM", "1024"))
+VEC_FIELD        = os.environ.get("VEC_FIELD", "vector")
+MAX_CTX_SNIPPET  = int(os.environ.get("MAX_CTX_SNIPPET", "120"))
+
+# ---------- Clients ----------
+_sess   = Session()
 bedrock = _sess.create_client("bedrock-runtime", region_name=BEDROCK_REGION)
 
+# ---------- Utilities ----------
 def _region_from_endpoint(endpoint: str) -> str:
     host = endpoint.replace("https://","").split("/")[0]
     parts = host.split(".")
@@ -41,10 +52,34 @@ def _signed_request(method: str, url: str, body: bytes, region: str):
     h = dict(p.headers); h.pop("Content-Length", None); h.pop("content-length", None)
     return urllib.request.urlopen(urllib.request.Request(p.url, data=body, method=p.method, headers=h))
 
+def _cors():
+    return {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    }
+
+def _json_headers():
+    h = _cors()
+    h["Content-Type"] = "application/json"
+    return h
+
+def _err(status, msg, where=None, exc=None):
+    body = {"error": msg}
+    if where: body["where"] = where
+    if exc:
+        print(f"[error] {where}: {exc}\n{traceback.format_exc()}")
+        if isinstance(exc, ClientError):
+            err = exc.response.get("Error") or {}
+            body["bedrock_code"] = err.get("Code")
+            body["bedrock_message"] = err.get("Message")
+    return {"statusCode": status, "headers": _json_headers(), "body": json.dumps(body)}
+
+# ---------- Embedding ----------
 def _embed(text: str):
     body = {"inputText": (text or "")[:4000]}
     last = None
-    for i in range(4):  # retries
+    for i in range(4):  # retries with small backoff
         try:
             r = bedrock.invoke_model(
                 modelId=EMBED_MODEL_ID,
@@ -66,6 +101,7 @@ def _embed(text: str):
             raise
     raise last or RuntimeError("embed failed")
 
+# ---------- Search (KNN) ----------
 def _knn(vec, k=10):
     url = f"{AOSS_ENDPOINT.rstrip('/')}/{INDEX_NAME}/_search"
     body = {
@@ -92,6 +128,7 @@ def _dedupe_hits(hits, want=3):
             break
     return out
 
+# ---------- Prompt ----------
 def _build_messages(question: str, hits):
     blocks = []
     for i,h in enumerate(hits, start=1):
@@ -105,50 +142,58 @@ def _build_messages(question: str, hits):
     )
     return [{"role":"user","content":[{"type":"text","text":prompt}]}]
 
-def _cors():
-    return {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    }
+# ---------- Chat (pacing + retries + fallback) ----------
+_last_chat_ts = 0.0
+def _respect_min_gap():
+    global _last_chat_ts
+    now = time.time()
+    gap_s = CHAT_MIN_GAP_MS / 1000.0
+    wait = gap_s - (now - _last_chat_ts)
+    if wait > 0:
+        time.sleep(wait)
+    _last_chat_ts = time.time()
 
-def _err(status, msg, where=None, exc=None):
-    body = {"error": msg}
-    if where: body["where"] = where
-    if exc:
-        print(f"[error] {where}: {exc}\n{traceback.format_exc()}")
-        if isinstance(exc, ClientError):
-            err = exc.response.get("Error") or {}
-            body["bedrock_code"] = err.get("Code")
-            body["bedrock_message"] = err.get("Message")
-    return {"statusCode": status, "headers": _cors(), "body": json.dumps(body)}
-
-def _chat(messages):
+def _chat_once(messages, model_id):
     payload = {"anthropic_version":"bedrock-2023-05-31","max_tokens":700,"messages":messages}
+    _respect_min_gap()
+    r = bedrock.invoke_model(
+        modelId=model_id,
+        body=json.dumps(payload).encode("utf-8"),
+        contentType="application/json",
+        accept="application/json",
+    )
+    out = json.loads(r["body"].read().decode("utf-8","ignore"))
+    return (out.get("content") or [{}])[0].get("text","")
+
+def _chat_with_retries(messages, model_id, attempts=4):
     last = None
-    for i in range(4):  # retries
+    for i in range(attempts):
         try:
-            r = bedrock.invoke_model(
-                modelId=CHAT_MODEL_ID,
-                body=json.dumps(payload).encode("utf-8"),
-                contentType="application/json",
-                accept="application/json",
-            )
-            out = json.loads(r["body"].read().decode("utf-8","ignore"))
-            return (out.get("content") or [{}])[0].get("text","")
+            return _chat_once(messages, model_id)
         except ClientError as e:
             code = (e.response.get("Error") or {}).get("Code","")
             if code in ("ThrottlingException","ModelTimeoutException","ServiceUnavailableException","InternalServerException"):
-                time.sleep(0.5 * (2**i))
+                # exponential backoff + jitter
+                sleep = (1.0 + random.random()*0.5) * (2 ** i)  # ~1.0s, 2.1s, 4.4s, 8.8s
+                time.sleep(sleep)
                 last = e
                 continue
             raise
-    raise last or RuntimeError("chat failed")
+    raise last or RuntimeError("chat failed after retries")
 
+# ---------- Tiny in-memory cache (per warm container) ----------
+_cache = {"q": None, "resp": None, "ts": 0.0}
+def _get_cached(q):
+    if _cache["q"] == q and time.time() - _cache["ts"] < 60:
+        return _cache["resp"]
+def _set_cached(q, resp):
+    _cache.update({"q": q, "resp": resp, "ts": time.time()})
+
+# ---------- Lambda handler ----------
 def handler(event, _ctx):
     # CORS preflight
     if event.get("requestContext",{}).get("http",{}).get("method") == "OPTIONS":
-        return {"statusCode": 200, "headers": _cors(), "body": ""}
+        return {"statusCode": 200, "headers": _json_headers(), "body": ""}
 
     # Parse body
     try:
@@ -165,6 +210,10 @@ def handler(event, _ctx):
     if not q:
         return _err(400, "missing q")
 
+    cached = _get_cached(q)
+    if cached:
+        return {"statusCode": 200, "headers": _json_headers(), "body": json.dumps(cached)}
+
     # 1) embed
     try:
         qvec = _embed(q)
@@ -179,13 +228,21 @@ def handler(event, _ctx):
         return _err(502, "search failed (AOSS)", "search", e)
 
     if not hits:
-        return {"statusCode": 200, "headers": _cors(),
-                "body": json.dumps({"answer": "I couldn’t find anything relevant in the knowledge base.", "citations": []})}
+        resp = {"answer": "I couldn’t find anything relevant in the knowledge base.", "citations": []}
+        _set_cached(q, resp)
+        return {"statusCode": 200, "headers": _json_headers(), "body": json.dumps(resp)}
 
-    # 3) compose + chat
+    # 3) compose + chat (with fallback)
     try:
         msgs = _build_messages(q, hits)
-        answer = _chat(msgs)
+        try:
+            answer = _chat_with_retries(msgs, CHAT_MODEL_ID, attempts=4)
+        except ClientError as e:
+            err_code = (e.response.get("Error") or {}).get("Code","")
+            if err_code == "ThrottlingException" and CHAT_FALLBACK_ID:
+                answer = _chat_with_retries(msgs, CHAT_FALLBACK_ID, attempts=4)
+            else:
+                raise
     except Exception as e:
         return _err(502, "chat failed (Claude)", "chat", e)
 
@@ -197,4 +254,7 @@ def handler(event, _ctx):
       for h in hits
       for s in [h.get("_source", {}) or {}]
     ]
-    return {"statusCode": 200, "headers": _cors(), "body": json.dumps({"answer": answer, "citations": citations})}
+
+    resp = {"answer": answer, "citations": citations}
+    _set_cached(q, resp)
+    return {"statusCode": 200, "headers": _json_headers(), "body": json.dumps(resp)}
