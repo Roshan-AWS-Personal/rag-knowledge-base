@@ -15,13 +15,18 @@ variable "env" {
   default = "prod"
 }
 
+variable "github_owner"{
+  type = string
+  default = "Roshan-AWS-Personal"
+}
 
-# variables.tf
-variable "github_owner"   { type = string }
-variable "github_repo"    { type = string }
+variable "github_repo"{
+  type = string
+  default = "rag-knowledge-base"
+}
 variable "allowed_branches" {
   type    = list(string)
-  default = ["main"] # add "dev" etc if needed
+  default = ["main, initial-config"] # add "dev" etc if needed
 }
 variable "project" {
   type = string

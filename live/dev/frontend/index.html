@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Knowledge-base chat (dev)</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>💬</text></svg>">
+  <style>
+    body{font-family:system-ui,Inter,Segoe UI,Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}
+    .msg{padding:12px 14px;border-radius:14px;margin:10px 0;white-space:pre-wrap}
+    .user{background:#eef}
+    .bot{background:#f6f6f6}
+    .row{display:flex;gap:8px;position:sticky;bottom:0;background:#fff;padding:12px 0}
+    input,button{font-size:16px}
+    input{flex:1;padding:10px 12px;border:1px solid #ddd;border-radius:10px}
+    button{padding:10px 14px;border:1px solid #ddd;border-radius:10px;cursor:pointer}
+  </style>
+</head>
+<body>
+  <h2>Knowledge-base chat (dev)</h2>
+  <div id="chat"></div>
+  <div class="row">
+    <input id="q" placeholder="Ask..." autofocus />
+    <button id="ask">Ask</button>
+  </div>
+
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const chat = document.getElementById('chat');
+    const q    = document.getElementById('q');
+    const btn  = document.getElementById('ask');
+
+    function bubble(text, cls){ const d=document.createElement('div'); d.className='msg '+cls; d.textContent=text; chat.appendChild(d); window.scrollTo(0,document.body.scrollHeight); }
+
+    let busy = false;
+
+    async function ask(){
+      if (busy) return;
+      const text = q.value.trim();
+      if (!text) return;
+
+      bubble(text,'user');
+      q.value=''; btn.disabled=true; busy=true;
+
+      try{
+        const res = await fetch('/query', {
+          method: 'POST',
+          headers: {'content-type':'application/json'},
+          body: JSON.stringify({ q: text })
+        });
+
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        let data;
+        if (ct.includes('application/json')) {
+          data = await res.json();
+        } else {
+          // Sometimes proxies return JSON but with wrong content type—try to parse it.
+          const t = await res.text();
+          try { data = JSON.parse(t); }
+          catch { throw new Error(`Non-JSON response – ${t.slice(0,200)}`); }
+        }
+
+        if (!res.ok && data?.error) {
+          throw new Error(`${data.error}${data.bedrock_code ? ` (${data.bedrock_code})` : ''}`);
+        }
+
+        bubble(data.answer || JSON.stringify(data), 'bot');
+        if (Array.isArray(data.citations) && data.citations.length) {
+          const lines = data.citations.map(x => `${x.source} (p.${x.page ?? "?"})`);
+          bubble("Sources:\n- " + lines.join("\n- "), 'bot');
+        }
+      } catch (e){
+        bubble("Error: " + (e?.message || e), 'bot');
+      } finally {
+        // small cooldown to avoid rapid-fire throttling
+        setTimeout(() => { busy=false; btn.disabled=false; }, 1200);
+      }
+    }
+
+    btn.onclick = ask;
+    q.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) ask(); };
+  });
+  </script>
+</body>
+</html>

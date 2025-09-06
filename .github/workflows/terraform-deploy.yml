@@ -16,7 +16,7 @@ on:
         default: false
 
 permissions:
-  id-token: write   # <-- REQUIRED for OIDC
+  id-token: write
   contents: read
 
 jobs:
@@ -51,6 +51,12 @@ jobs:
             echo "STATE_BUCKET=${{ env.STATE_BUCKET_PROD }}" >> $GITHUB_ENV
           fi
           echo "WORK_DIR=live/${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+      
+      - name: Debug context
+        run: |
+          echo "repo=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          echo "computed_sub=repo:${{ github.repository }}:ref:${{ github.ref }}"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -58,14 +64,21 @@ jobs:
           role-to-assume: ${{ env.ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: tf-${{ github.run_id }}
+          
+      - name: Who am I?
+        run: aws sts get-caller-identity
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: "1.8.5"
+          terraform_version: "1.5.0"
+
+      - name: Show backend target
+        run: |
+          echo "STATE_KEY=${{ env.STATE_PREFIX }}/${{ github.event.inputs.environment }}/terraform.tfstate"
 
       - name: Terraform Init
-        working-directory: ${{ steps.select.outputs.WORK_DIR }}
+        working-directory: ${{ steps.select.outputs.WORK_DIR }}  # ✅ matches the 'Select role...' step id
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ env.STATE_BUCKET }}" \
@@ -79,8 +92,10 @@ jobs:
 
       - name: Terraform Plan
         working-directory: ${{ steps.select.outputs.WORK_DIR }}
+        env:
+          TF_LOG: INFO
         run: |
-          terraform plan \
+          terraform plan -lock-timeout=2m \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="state_bucket=${{ env.STATE_BUCKET }}" \
             -var="state_prefix=${{ env.STATE_PREFIX }}" \
