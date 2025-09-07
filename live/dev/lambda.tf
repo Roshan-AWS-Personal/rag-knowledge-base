@@ -228,7 +228,7 @@ resource "aws_lambda_function_url" "query_url" {
   authorization_type = "NONE"
   cors {
     allow_origins = ["*"]
-    allow_methods = ["GET", "POST", "OPTIONS"]
+    allow_methods = ["GET", "POST"]
     allow_headers = ["*"]
   }
 }
