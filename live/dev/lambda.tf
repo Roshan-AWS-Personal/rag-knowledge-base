@@ -2,7 +2,9 @@
 # Locals & lookups
 ############################################
 locals {
-  name = "ai-kb-dev"
+    name = "ai-kb-dev"
+    ingest_build_id = filesha256("${path.root}/lambda/ingest/Dockerfile") + filesha256("${path.root}/lambda/ingest/requirements.txt") + filesha256("${path.root}/lambda/ingest/app.py")
+    query_build_id  = filesha256("${path.root}/lambda/query/Dockerfile") + filesha256("${path.root}/lambda/query/requirements.txt") + filesha256("${path.root}/lambda/query/app.py")
 }
 
 data "aws_region" "current" {}
@@ -29,15 +31,15 @@ resource "aws_ecr_repository" "query_repo" {
 # Build & push images with Terraform
 ############################################
 # INGEST
+# In docker_image blocks
 resource "docker_image" "ingest" {
   name = "${aws_ecr_repository.ingest_repo.repository_url}:latest"
-
   build {
     context    = "${path.root}/lambda/ingest"
     dockerfile = "Dockerfile"
-    platform   = "linux/amd64"    # <— add this
+    platform   = "linux/amd64"
+    build_args = { BUILD_ID = local.ingest_build_id }
   }
-
   keep_locally = true
   depends_on   = [aws_ecr_repository.ingest_repo]
 }
@@ -48,15 +50,15 @@ resource "docker_registry_image" "ingest" {
 }
 
 # QUERY
+
 resource "docker_image" "query" {
   name = "${aws_ecr_repository.query_repo.repository_url}:latest"
-
   build {
     context    = "${path.root}/lambda/query"
     dockerfile = "Dockerfile"
-    platform   = "linux/amd64"    # <— add this
+    platform   = "linux/amd64"
+    build_args = { BUILD_ID = local.query_build_id }
   }
-
   keep_locally = true
   depends_on   = [aws_ecr_repository.query_repo]
 }
@@ -175,7 +177,7 @@ resource "aws_lambda_function" "ingest" {
   package_type  = "Image"
 
   # Digest from pushed image
-  image_uri     = "${aws_ecr_repository.ingest_repo.repository_url}@${docker_registry_image.ingest.sha256_digest}"
+  image_uri = "${aws_ecr_repository.ingest_repo.repository_url}@${docker_registry_image.ingest.sha256_digest}"
 
   timeout       = 300
   memory_size   = 1024
@@ -200,7 +202,7 @@ resource "aws_lambda_function" "query" {
   role          = aws_iam_role.query_exec.arn
   package_type  = "Image"
 
-  image_uri     = "${aws_ecr_repository.query_repo.repository_url}@${docker_registry_image.query.sha256_digest}"
+  image_uri = "${aws_ecr_repository.query_repo.repository_url}@${docker_registry_image.query.sha256_digest}"
 
   timeout       = 60
   memory_size   = 2048
