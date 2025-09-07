@@ -26,24 +26,6 @@ resource "aws_ecr_repository" "query_repo" {
 }
 
 ############################################
-# Docker provider authenticates to ECR
-############################################
-data "aws_ecr_authorization_token" "ecr" {}
-
-# Some Docker versions want the address without https://
-locals {
-  ecr_address = replace(data.aws_ecr_authorization_token.ecr.proxy_endpoint, "https://", "")
-}
-
-provider "docker" {
-  registry_auth {
-    address  = local.ecr_address
-    username = data.aws_ecr_authorization_token.ecr.user_name
-    password = data.aws_ecr_authorization_token.ecr.password
-  }
-}
-
-############################################
 # Build & push images with Terraform
 ############################################
 # INGEST
