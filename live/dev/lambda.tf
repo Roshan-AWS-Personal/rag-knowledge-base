@@ -3,8 +3,17 @@
 ############################################
 locals {
     name = "ai-kb-dev"
-    ingest_build_id = filesha256("${path.root}/lambda/ingest/Dockerfile") + filesha256("${path.root}/lambda/ingest/requirements.txt") + filesha256("${path.root}/lambda/ingest/app.py")
-    query_build_id  = filesha256("${path.root}/lambda/query/Dockerfile") + filesha256("${path.root}/lambda/query/requirements.txt") + filesha256("${path.root}/lambda/query/app.py")
+    ingest_build_id = sha256(join("", [
+      filesha256("${path.root}/lambda/ingest/Dockerfile"),
+      filesha256("${path.root}/lambda/ingest/requirements.txt"),
+      filesha256("${path.root}/lambda/ingest/app.py"),
+    ]))
+
+    query_build_id = sha256(join("", [
+      filesha256("${path.root}/lambda/query/Dockerfile"),
+      filesha256("${path.root}/lambda/query/requirements.txt"),
+      filesha256("${path.root}/lambda/query/app.py"),
+    ]))
 }
 
 data "aws_region" "current" {}
