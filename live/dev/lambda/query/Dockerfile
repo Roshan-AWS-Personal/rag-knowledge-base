@@ -1,8 +1,10 @@
 FROM public.ecr.aws/lambda/python:3.11
 
+# needed by faiss wheel on Amazon Linux
 RUN (dnf -y install libgomp || yum -y install libgomp || true) && (dnf clean all || yum clean all || true)
 
 COPY requirements.txt .
+RUN echo "--- requirements.txt ---" && cat requirements.txt && echo "-----------------------"
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
     python - <<'PY'
