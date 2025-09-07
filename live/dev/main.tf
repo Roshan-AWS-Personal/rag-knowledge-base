@@ -28,7 +28,7 @@ provider "docker" {
 }
 
 
-resource "aws_s3_bucket" "rag-documents_bucket" {
+resource "aws_s3_bucket" "rag_documents_bucket" {
   bucket = "ai-kb-${var.env}-docs"
   force_destroy = true
 }
