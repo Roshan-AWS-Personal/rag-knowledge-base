@@ -244,25 +244,6 @@ resource "aws_lambda_function_url" "query_url" {
   }
 }
 
-resource "aws_lambda_permission" "s3_to_ingest" {
-  statement_id  = "AllowS3InvokeIngest"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ingest.arn
-  principal     = "s3.amazonaws.com"
-  source_arn    = aws_s3_bucket.rag_documents_bucket.arn  # use your bucket arn or local.docs_bucket_arn
-}
-
-resource "aws_s3_bucket_notification" "docs_events" {
-  bucket = aws_s3_bucket.rag_documents_bucket.id
-  lambda_function {
-    lambda_function_arn = aws_lambda_function.ingest.arn
-    events              = ["s3:ObjectCreated:*"]
-    filter_prefix       = "docs/"
-    filter_suffix       = ".txt"
-  }
-  depends_on = [aws_lambda_permission.s3_to_ingest]
-}
-
 ############################################
 # Outputs
 ############################################
