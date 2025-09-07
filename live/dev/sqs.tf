@@ -42,8 +42,8 @@ data "aws_iam_policy_document" "ingest_runtime_perms" {
       "s3:ListBucket"
     ]
     resources = [
-      aws_s3_bucket.rag-documents_bucket.arn,
-      "${aws_s3_bucket.rag-documents_bucket.arn}/*"
+      aws_s3_bucket.rag_documents_bucket.arn,
+      "${aws_s3_bucket.rag_documents_bucket.arn}/*"
     ]
   }
 }

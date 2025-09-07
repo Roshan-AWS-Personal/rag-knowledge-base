@@ -94,7 +94,7 @@ resource "aws_iam_role_policy" "ingest_runtime" {
         Sid      = "DocsReadList",
         Effect   = "Allow",
         Action   = ["s3:ListBucket"],
-        Resource = [aws_s3_bucket.rag-documents_bucket.arn],
+        Resource = [aws_s3_bucket.rag_documents_bucket.arn],
         Condition = { StringLike = { "s3:prefix" = ["docs/*", "docs/"] } }
       },
       {
