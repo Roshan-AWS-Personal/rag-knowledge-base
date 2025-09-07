@@ -33,12 +33,13 @@ resource "docker_image" "ingest" {
   name = "${aws_ecr_repository.ingest_repo.repository_url}:latest"
 
   build {
-    context    = "${path.module}/lambda/ingest"
+    context    = "${path.root}/lambda/ingest"
     dockerfile = "Dockerfile"
-    # platform = "linux/amd64"  # uncomment if needed
+    platform   = "linux/amd64"    # <— add this
   }
 
   keep_locally = true
+  depends_on   = [aws_ecr_repository.ingest_repo]
 }
 
 resource "docker_registry_image" "ingest" {
@@ -51,12 +52,13 @@ resource "docker_image" "query" {
   name = "${aws_ecr_repository.query_repo.repository_url}:latest"
 
   build {
-    context    = "${path.module}/lambda/query"
+    context    = "${path.root}/lambda/query"
     dockerfile = "Dockerfile"
-    # platform = "linux/amd64"
+    platform   = "linux/amd64"    # <— add this
   }
 
   keep_locally = true
+  depends_on   = [aws_ecr_repository.query_repo]
 }
 
 resource "docker_registry_image" "query" {
