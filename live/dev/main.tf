@@ -1,21 +1,15 @@
 terraform {
   required_providers {
-    docker = {
-      source  = "kreuzwerker/docker"
-      # optional: pin a range
-      # version = "~> 3.0"
-    }
+    aws = { source = "hashicorp/aws" }
+    docker = { source = "kreuzwerker/docker" }
   }
 }
 
-# If you set AWS region via env (AWS_REGION), you can omit this.
 provider "aws" {}
 
-# ---- Docker provider auth to ECR ----
 data "aws_ecr_authorization_token" "ecr" {}
 
 locals {
-  # Docker Desktop must be running. On Windows, kreuzwerker/docker works with the npipe by default.
   ecr_address = replace(data.aws_ecr_authorization_token.ecr.proxy_endpoint, "https://", "")
 }
 

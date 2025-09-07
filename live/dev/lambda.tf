@@ -261,3 +261,6 @@ output "query_function_url" {
   value       = aws_lambda_function_url.query_url.function_url
   description = "Public URL for query Lambda (dev)"
 }
+
+output "ingest_image_digest" { value = docker_registry_image.ingest.sha256_digest }
+output "query_image_digest"  { value = docker_registry_image.query.sha256_digest  }
