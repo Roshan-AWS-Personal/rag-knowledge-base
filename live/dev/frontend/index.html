@@ -80,10 +80,6 @@
       </div>
       <div class="row2">
         <div class="kv">
-          <label for="api">API URL</label>
-          <input id="api" type="text" placeholder="https://your-api.example.com/query" />
-        </div>
-        <div class="kv">
           <label for="auth">Bearer (optional)</label>
           <input id="auth" type="text" placeholder="sk-… or JWT (optional)" />
         </div>
@@ -96,7 +92,7 @@
           <input id="sys" type="text" placeholder="You are a helpful RAG assistant." />
         </div>
       </div>
-      <div class="hint">Set your <strong>API URL</strong> to your query Lambda/APIGW endpoint (e.g. <code>/query</code>). If your authorizer needs a token, paste it in <strong>Bearer</strong>. Values persist locally.</div>
+      <div class="hint">Calls <code>/query</code> behind CloudFront → API Gateway. If your authorizer needs a token, paste it in <strong>Bearer</strong>. Values persist locally.</div>
     </footer>
   </div>
 
@@ -106,7 +102,6 @@
       chat: document.getElementById('chat'),
       input: document.getElementById('input'),
       send: document.getElementById('send'),
-      api: document.getElementById('api'),
       auth: document.getElementById('auth'),
       topk: document.getElementById('topk'),
       sys: document.getElementById('sys'),
@@ -121,17 +116,16 @@
       save(cfg) { localStorage.setItem(this.k, JSON.stringify(cfg)); }
     };
 
-    const cfg = Object.assign({ api:'', bearer:'', topk:4, system:'' }, storage.load());
-    els.api.value = cfg.api || '';
+    const cfg = Object.assign({ bearer:'', topk:4, system:'' }, storage.load());
     els.auth.value = cfg.bearer || '';
     els.topk.value = cfg.topk || 4;
     els.sys.value = cfg.system || '';
 
     function persist() {
-      storage.save({ api: els.api.value.trim(), bearer: els.auth.value.trim(), topk: Number(els.topk.value)||4, system: els.sys.value.trim() });
+      storage.save({ bearer: els.auth.value.trim(), topk: Number(els.topk.value)||4, system: els.sys.value.trim() });
     }
     ['change','input','blur'].forEach(ev => {
-      [els.api, els.auth, els.topk, els.sys].forEach(el => el.addEventListener(ev, persist));
+      [els.auth, els.topk, els.sys].forEach(el => el.addEventListener(ev, persist));
     });
 
     // ---- chat rendering ----
@@ -187,20 +181,19 @@
 
     // ---- networking ----
     async function sendQuery(prompt) {
-      const api = els.api.value.trim();
       const bearer = els.auth.value.trim();
       const topk = Number(els.topk.value) || 4;
       const system = els.sys.value.trim();
-      if (!api) { alert('Set API URL first.'); return; }
+      const api = '/query'; // CloudFront relative path
 
       const payload = {
-        question: prompt,
-        top_k: topk,
+        // Backends differ; most common is 'q' not 'question'
+        q: prompt,
+        k: topk,
         history: history.map(h => ({ role: h.role, content: h.content })),
         system: system || undefined
       };
 
-      // Try SSE/streaming first; fall back to JSON
       try {
         const res = await fetch(api, {
           method: 'POST',
@@ -220,7 +213,6 @@
             const { value, done } = await reader.read();
             if (done) break;
             const chunk = decoder.decode(value, { stream: true });
-            // parse simple SSE: lines beginning with "data:"
             for (const line of chunk.split(/\r?\n/)) {
               if (line.startsWith('data:')) {
                 const data = line.slice(5).trim();
@@ -228,7 +220,7 @@
                 try {
                   const obj = JSON.parse(data);
                   if (obj.delta) { p.textContent += obj.delta; els.chat.scrollTop = els.chat.scrollHeight; }
-                } catch { /* ignore non-JSON tokens */ }
+                } catch {}
               }
             }
           }
@@ -240,12 +232,11 @@
         console.warn('Streaming failed, falling back to JSON:', e);
       }
 
-      // Non-streaming JSON path
-      const res2 = await fetch(els.api.value.trim(), {
+      const res2 = await fetch(api, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(els.auth.value.trim() ? { 'Authorization': `Bearer ${els.auth.value.trim()}` } : {})
+          ...(bearer ? { 'Authorization': `Bearer ${bearer}` } : {})
         },
         body: JSON.stringify(payload)
       });
