@@ -74,13 +74,13 @@ resource "aws_lambda_function" "ingest" {
 
   environment {
     variables = {
-      OPENSEARCH_ENDPOINT = aws_opensearchserverless_collection.kb.collection_endpoint
-      INDEX_NAME          = "chunks"
-      EMBED_DIM           = "1024"
-      SKIP_AOSS           = "0" 
-      BEDROCK_REGION      = "ap-southeast-2"
-      EMBED_MODEL_ID      = "amazon.titan-embed-text-v2:0"
-      PREVIEW_KNN         = "1"   # set "0" to disable the quick preview logs
+      S3_BUCKET = "${aws_s3_bucket.rag-documents_bucket.bucket}"
+      DOCS_PREFIX = "docs/"
+      INDEX_PREFIX = "indexes/latest/"
+      BEDROCK_REGION = "ap-southeast-2"
+      EMBED_MODEL_ID = "amazon.titan-embed-text-v2:0"
+      EMBED_DIM = 1024
+      TOP_K = 5                     # (query only)
     }
   }
 
