@@ -5,18 +5,18 @@ RUN (dnf -y install libgomp || yum -y install libgomp || true) && (dnf clean all
 
 COPY requirements.txt .
 
-# Helpful: print the requirements the image actually sees
+# Show exactly what the image sees
 RUN echo "--- requirements.txt ---" && cat requirements.txt && echo "-----------------------"
 
-# Keep pip recent and force wheels only for faiss
+# Force prebuilt FAISS wheel; fallback to 1.7.4 if 1.8.0 wheel unavailable
 RUN python -m pip install --upgrade pip && \
     (pip install --no-cache-dir --only-binary=:all: faiss-cpu==1.8.0 || \
      pip install --no-cache-dir --only-binary=:all: faiss-cpu==1.7.4) && \
     pip install --no-cache-dir -r requirements.txt && \
     python - <<'PY'
 import pkgutil
-assert pkgutil.find_loader("faiss"), "faiss missing"
-assert pkgutil.find_loader("numpy"), "numpy missing"
+for mod in ["faiss","numpy","boto3","packaging"]:
+    assert pkgutil.find_loader(mod), f"{mod} missing"
 print("✅ deps OK")
 PY
 
