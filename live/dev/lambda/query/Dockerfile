@@ -1,6 +1,5 @@
 FROM public.ecr.aws/lambda/python:3.11
 
-# tiny runtime dep needed by faiss wheel on Amazon Linux (covers AL2/AL2023)
 RUN (dnf -y install libgomp || yum -y install libgomp || true) && (dnf clean all || yum clean all || true)
 
 COPY requirements.txt .
@@ -13,6 +12,5 @@ assert pkgutil.find_loader("numpy"), "numpy missing"
 print("✅ deps OK")
 PY
 
-# your handler
 COPY app.py ${LAMBDA_TASK_ROOT}/app.py
 CMD ["app.handler"]
