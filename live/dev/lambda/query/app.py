@@ -1,4 +1,9 @@
-import os, json, io, boto3, faiss, numpy as np
+import os, json, io, time, random
+from typing import Any, Dict, List, Optional, cast
+import boto3
+from botocore.exceptions import ClientError
+import faiss  # type: ignore
+import numpy as np
 
 BUCKET = os.environ["S3_BUCKET"]
 INDEX_PREFIX = os.environ.get("INDEX_PREFIX", "indexes/latest/")
@@ -11,60 +16,125 @@ TOP_K = int(os.environ.get("TOP_K", "5"))
 s3 = boto3.client("s3")
 bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
 
-INDEX = None
-META = []
-ETAG = None
+INDEX: Optional[faiss.Index] = None
+META: List[Dict[str, Any]] = []
+ETAG: Optional[str] = None
 
+# -----------------------------
+# Bedrock invoke with retries
+# -----------------------------
+def _invoke_json_with_retry(
+    model_id: str,
+    payload: Dict[str, Any],
+    *,
+    accept: str = "application/json",
+    content_type: str = "application/json",
+    tries: int = 5,
+    base: float = 0.4,
+    cap: float = 4.0,
+) -> Dict[str, Any]:
+    """Invoke Bedrock and return parsed JSON. Retries on throttling with backoff + jitter."""
+    delay = base
+    last_exc: Optional[Exception] = None
+    last_body: Optional[str] = None
+
+    for attempt in range(1, tries + 1):
+        try:
+            resp: Dict[str, Any] = bedrock.invoke_model(
+                modelId=model_id,
+                accept=accept,
+                contentType=content_type,
+                body=json.dumps(payload),
+            )
+            stream: Any = resp.get("body")
+            if stream is None or not hasattr(stream, "read"):
+                raise RuntimeError("Bedrock response missing streaming body")
+            raw_bytes: bytes = cast(bytes, stream.read())
+            body_str: str = raw_bytes.decode("utf-8", errors="replace")
+            last_body = body_str
+            return json.loads(body_str)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("ThrottlingException", "Throttling", "TooManyRequestsException"):
+                last_exc = e
+                if attempt == tries:
+                    break
+                time.sleep(delay + random.random() * 0.2)
+                delay = min(delay * 2, cap)
+                continue
+            raise
+        except Exception as e:
+            last_exc = e
+            if attempt == tries:
+                break
+            time.sleep(delay + random.random() * 0.2)
+            delay = min(delay * 2, cap)
+
+    msg = f"Bedrock invoke failed after {tries} attempts."
+    if last_exc:
+        msg += f" Error: {last_exc}"
+    if last_body:
+        msg += f" Body: {last_body[:200]}..."
+    raise RuntimeError(msg)
+
+# -----------------------------
+# Embedding / FAISS helpers
+# -----------------------------
 def _embed(q: str) -> np.ndarray:
-    body = json.dumps({"inputText": q})
-    resp = bedrock.invoke_model(
-        modelId=EMBED_MODEL_ID,
-        accept="application/json",
-        contentType="application/json",
-        body=body
-    )
-    out = json.loads(resp["body"].read())
-    v = np.array(out["embedding"], dtype="float32")
-    n = np.linalg.norm(v) or 1.0
-    return (v / n).astype("float32")[None, :]  # (1, d)
+    out = _invoke_json_with_retry(EMBED_MODEL_ID, {"inputText": q})
+    emb = out.get("embedding")
+    if not isinstance(emb, list):
+        raise ValueError("Embedding response malformed: missing 'embedding' list")
+    v = np.array(emb, dtype=np.float32)
+    if v.ndim != 1:
+        v = v.reshape(-1)
+    n = float(np.linalg.norm(v)) or 1.0
+    v = (v / n).astype(np.float32, copy=False)[None, :]  # (1, d)
+    # Optional: check dimension, but don't crash if different
+    # if v.shape[1] != EMBED_DIM: pass
+    return v
 
-def _ensure_index_loaded():
+def _ensure_index_loaded() -> None:
     global INDEX, META, ETAG
     head = s3.head_object(Bucket=BUCKET, Key=INDEX_PREFIX + "index.faiss")
     new_etag = head["ETag"].strip('"')
     if INDEX is not None and ETAG == new_etag:
         return
+
     idx_path = "/tmp/index.faiss"
     meta_path = "/tmp/meta.jsonl"
     s3.download_file(BUCKET, INDEX_PREFIX + "index.faiss", idx_path)
     s3.download_file(BUCKET, INDEX_PREFIX + "meta.jsonl",  meta_path)
+
     INDEX = faiss.read_index(idx_path)
     META = [json.loads(line) for line in io.open(meta_path, "r", encoding="utf-8")]
     ETAG = new_etag
 
-def _select_hits(q_vec: np.ndarray, k: int):
-    # Clamp k to the number of vectors we actually have.
-    k = max(1, min(k, len(META)))
-    D, I = INDEX.search(q_vec.astype("float32"), k)
-    results = []
-    for dist, idx in zip(D[0].tolist(), I[0].tolist()):
-        if idx == -1:  # FAISS filler when not enough neighbors
+def _select_hits(index: faiss.Index, meta: List[Dict[str, Any]], q_vec: np.ndarray, k: int) -> List[Dict[str, Any]]:
+    k = max(1, min(k, len(meta)))
+    q_arr: np.ndarray = q_vec.astype(np.float32, copy=False)
+    # FAISS lacks precise type stubs; suppress Pylance confusion on this call:
+    D, I = index.search(q_arr, k)  # type: ignore[attr-defined]
+    results: List[Dict[str, Any]] = []
+    dlist = cast(List[float], D[0].tolist())
+    ilist = cast(List[int], I[0].tolist())
+    for dist, idx in zip(dlist, ilist):
+        if idx == -1:
             continue
-        m = META[idx]
-        # you can transform dist to similarity if needed; we keep it internal
+        m = meta[idx]
         results.append({
             "idx": idx,
             "distance": float(dist),
             "s3key": m.get("s3key"),
-            "preview": m.get("preview", "")
+            "preview": m.get("preview", ""),
         })
     return results
 
-def _build_context(hits, max_chars=1800):
-    """Concatenate previews until max_chars."""
-    buf, used = [], 0
+def _build_context(hits: List[Dict[str, Any]], max_chars: int = 1800) -> str:
+    buf: List[str] = []
+    used = 0
     for h in hits:
-        snippet = h.get("preview") or ""
+        snippet = (h.get("preview") or "").strip()
         if not snippet:
             continue
         if used + len(snippet) + 100 > max_chars:
@@ -73,9 +143,11 @@ def _build_context(hits, max_chars=1800):
         used += len(snippet) + 1
     return "\n".join(buf)
 
-def _chat_with_bedrock(question: str, context: str, system: str | None = None, max_tokens: int = 600):
-    # Anthropic Claude via Bedrock (messages API)
-    payload = {
+# -----------------------------
+# Chat (Claude via Bedrock)
+# -----------------------------
+def _chat_with_bedrock(question: str, context: str, system: Optional[str] = None, max_tokens: int = 300) -> str:
+    payload: Dict[str, Any] = {
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": max_tokens,
         "messages": [
@@ -95,52 +167,65 @@ def _chat_with_bedrock(question: str, context: str, system: str | None = None, m
             }
         ]
     }
-    # Alternatively, you can pass top-level "system": "...", but in Bedrock's Anthropics
-    # it's supported as a top-level field. This inline form works well too.
-    resp = bedrock.invoke_model(
-        modelId=CHAT_MODEL_ID,
-        accept="application/json",
-        contentType="application/json",
-        body=json.dumps(payload)
-    )
-    data = json.loads(resp["body"].read())
-    # Extract text from the first content block
-    try:
-        text = "".join(part.get("text","") for part in data["content"][0]["text"] if isinstance(part, dict))  # for older schemas
-    except Exception:
-        # Newer schema: list of blocks with {"type":"text","text": "..."}
-        blocks = data.get("content", [])
-        text_parts = []
+    data = _invoke_json_with_retry(CHAT_MODEL_ID, payload)
+
+    # Primary: blocks [{"type":"text","text":"..."}]
+    blocks = data.get("content")
+    if isinstance(blocks, list):
+        parts: List[str] = []
         for b in blocks:
             if isinstance(b, dict) and b.get("type") == "text":
-                text_parts.append(b.get("text",""))
-        text = "".join(text_parts) or data.get("output_text") or ""
-    return text.strip() or "I couldn't find the answer in the indexed context."
+                t = b.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+        if parts:
+            return "".join(parts).strip()
 
-def _response(status: int, body: dict):
+    # Fallback: older nested form
+    try:
+        items = data["content"][0]["text"]  # type: ignore[index]
+        if isinstance(items, list):
+            out = "".join(part.get("text", "") for part in items if isinstance(part, dict)).strip()
+            if out:
+                return out
+    except Exception:
+        pass
+
+    # Last resorts
+    for k in ("output_text", "completion", "answer"):
+        val = data.get(k)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    return "I couldn't find the answer in the indexed context."
+
+# -----------------------------
+# HTTP / Lambda
+# -----------------------------
+def _response(status: int, body: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "statusCode": status,
         "headers": {
             "Content-Type": "application/json",
-            # permissive CORS for dev; tighten in prod
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Content-Type,Authorization",
-            "Access-Control-Allow-Methods": "POST,OPTIONS"
+            "Access-Control-Allow-Methods": "POST,OPTIONS",
         },
-        "body": json.dumps(body)
+        "body": json.dumps(body),
     }
 
-def handler(event, context):
-    if event.get("httpMethod") == "OPTIONS":  # CORS preflight
+def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    if event.get("httpMethod") == "OPTIONS":
         return _response(200, {"ok": True})
 
     _ensure_index_loaded()
 
-    body = {}
-    if isinstance(event, dict) and isinstance(event.get("body"), str):
+    body: Dict[str, Any] = {}
+    raw = event.get("body")
+    if isinstance(raw, str):
         try:
-            body = json.loads(event["body"])
-        except:
+            body = json.loads(raw)
+        except Exception:
             body = {}
     elif isinstance(event, dict):
         body = event
@@ -154,14 +239,11 @@ def handler(event, context):
     if INDEX is None:
         return _response(500, {"error": "FAISS index not loaded"})
 
-    # 1) retrieve
     q_vec = _embed(q)
-    hits = _select_hits(q_vec, k)
+    hits = _select_hits(INDEX, META, q_vec, k)
 
-    # 2) generate
     context_text = _build_context(hits)
     answer = _chat_with_bedrock(q, context_text, system=system)
 
-    # 3) return friendly shape for your UI
     sources = [{"key": h["s3key"], "preview": h["preview"]} for h in hits]
     return _response(200, {"answer": answer, "sources": sources})
