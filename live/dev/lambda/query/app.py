@@ -9,7 +9,7 @@ BUCKET = os.environ["S3_BUCKET"]
 INDEX_PREFIX = os.environ.get("INDEX_PREFIX", "indexes/latest/")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-southeast-2")
 EMBED_MODEL_ID = os.environ.get("EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0")
-CHAT_MODEL_ID  = os.environ.get("CHAT_MODEL_ID",  "anthropic.claude-3-sonnet-20240229-v1:0")
+CHAT_MODEL_ID  = os.environ.get("CHAT_MODEL_ID", "anthropic.claude-3-haiku-20240307-v1:0")
 EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
 TOP_K = int(os.environ.get("TOP_K", "5"))
 
