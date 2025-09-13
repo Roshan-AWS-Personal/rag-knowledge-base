@@ -2,7 +2,7 @@ resource "aws_apigatewayv2_api" "kb" {
   name          = "${local.name}-query-api"
   protocol_type = "HTTP"
   cors_configuration {
-    allow_headers = ["content-type"]
+    allow_headers = ["content-type", "authorization"]
     allow_methods = ["POST","OPTIONS"]
     allow_origins = ["*"]  # lock down later
   }

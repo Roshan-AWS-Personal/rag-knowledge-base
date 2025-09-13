@@ -241,7 +241,7 @@ resource "aws_lambda_function_url" "query_url" {
     allow_origins = ["*"]
     allow_methods = ["GET", "POST"]
     allow_headers = ["*"]
-  }
+  } 
 }
 
 ############################################
